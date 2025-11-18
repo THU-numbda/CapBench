@@ -19,7 +19,6 @@ A complete pipeline for producing parasitic-capacitance datasets from OpenROAD l
    ```bash
    python -c "import torch, torch_geometric, klayout"
    ```
-4. If you plan to build the native SPEF bindings, follow the comment inside `environment.yml` (`cmake -S spef_bindings -B spef_build && cmake --build spef_build`).
 
 ### 2. Download & unpack the datasets (Zenodo DOI: 10.5281/zenodo.17636283)
 1. Visit https://doi.org/10.5281/zenodo.17636283 and download the archives you need (`nangate45.zip`, `sky130hd.zip`, `asap7.zip`, plus any auxiliary tarballs listed on the record). Every archive mirrors the directory structure expected by the scripts.
@@ -58,12 +57,11 @@ python CNN-Cap/train.py \
   --dataset-path datasets/nangate45/small \
   --window-dir datasets/nangate45/small/density_maps \
   --spef-dir datasets/nangate45/small/labels_rwcap \
-  --epoch 80 --batch_size 64 --lr 1e-4 \
+  --epoch 50 --batch_size 64 --lr 1e-4 \
   --labels-solver rwcap \
   --savename nangate45_small_total.pth
 ```
 * `--goal total|env` switches between total and coupling tasks.
-* Enable `--log` to train in log-space, and `--tb_logdir` to store TensorBoard traces.
 * The script automatically builds window-level splits (`common/window_splitting.py`) to avoid leakage.
 
 #### PCT‑Cap (point clouds)
@@ -73,8 +71,8 @@ python PCT-Cap/train.py \
   --point-cloud-dir datasets/nangate45/small/point_clouds \
   --spef-dir datasets/nangate45/small/labels_rwcap \
   --goal self \
-  --npoints 2048 --batch-size 32 --epochs 120 \
-  --lr 5e-5 --seed 7 \
+  --npoints 1024 --batch-size 64 --epochs 50 \
+  --lr 1e-4 \
   --output-dir pct_runs/nangate45_small_self
 ```
 * Use `--goal coupling` to regress only inter-net capacitances.
@@ -87,12 +85,10 @@ python GNN/train.py \
   --data-dir datasets/nangate45/small/graphs \
   --spef-dir datasets/nangate45/small/labels_rwcap \
   --model-type both \
-  --num-layers 3 --use-attention --heads 4 \
-  --epochs 60 --lr 1e-4 --gpus 1
+  --num-layers 2 --use-attention --heads 4 \
+  --epochs 50 --lr 1e-4
 ```
 * `--model-type total|coupling|both` decides which Lightning module(s) to run; training “both” runs two passes back-to-back and stores checkpoints under `checkpoints/{total,coupling}`.
-* `--labels-solver auto` lets the loader pick between RWCap/Raphael labels; override it if you want a dedicated ground-truth set.
-* Log files live under `logs/{total,coupling}` and can be inspected with TensorBoard.
 
 ## Visualization utilities
 
@@ -121,7 +117,7 @@ Use these steps to regenerate designs from RTL, extend the dataset, or evaluate 
    ```
 2. Copy this repository’s design overlays (`nangate45/`, `sky130hd/`, `asap7/`, `src/`, `tools/`) into the ORFS `flow/designs/` tree. The recommended approach is an rsync from the model pipeline root:
    ```bash
-   rsync -av --delete /path/to/model_pipeline/OpenROAD-flow-scripts/ ~/orfs/flow/designs/
+   rsync -av /path/to/model_pipeline/OpenROAD-flow-scripts/ ~/orfs/flow/designs/
    ```
 3. Launch the flow for any provided config (e.g., Nangate45 CVA6):
    ```bash
