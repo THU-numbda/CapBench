@@ -1,0 +1,131 @@
+name: cap3d-ml
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Python
+  - python=3.9
+
+  # PyTorch (CUDA 11.8) - Core ML framework for all three approaches
+  - pytorch=2.0.1
+  - torchvision=0.15.2
+  - torchaudio=2.0.2
+  - pytorch-cuda=11.8
+  # For CPU-only: replace pytorch-cuda with 'cpuonly'
+
+  # Scientific Computing
+  - numpy>=1.23.0
+  - scipy>=1.10.0
+  - pandas>=1.5.0
+  - scikit-learn>=1.2.0
+
+  # Visualization
+  - matplotlib>=3.6.0
+  - vtk>=9.2.0  # For cap3d_view.py 3D visualization
+
+  # YAML Processing
+  - pyyaml>=6.0
+
+  # GMSH (for GNN-Cap mesh generation and cap3d_mesh.py)
+  - gmsh>=4.11.0
+  - python-gmsh>=1.0.0
+
+  # Build Tools (for SPEF utilities)
+  - cmake>=3.20
+  - pybind11>=2.10.0
+  - cxx-compiler
+
+  # Progress Bars and Logging
+  - tqdm>=4.64.0
+  - tensorboard>=2.11.0
+
+  # Network Visualization (for GNN-Cap)
+  - networkx>=2.8.0
+
+  # Jupyter (optional, for analysis notebooks)
+  - jupyter
+  - ipython
+
+  # KLayout for CAP3D generation (GDS/DEF → CAP3D conversion)
+  - klayout>=0.28.0
+
+  # Pip packages (not available or better via pip)
+  - pip
+  - pip:
+    # PyTorch Geometric (for GNN-Cap) - Updated versions
+    - torch-geometric>=2.4.0
+    - torch-scatter>=2.1.1
+    - torch-sparse>=0.6.17
+    - torch-cluster>=1.6.1
+
+    # GNN-Cap Modernization Dependencies
+    - pytorch-lightning>=2.1.0     # Simplified training loops
+    - rich>=13.0.0                # Pretty console output
+
+    # PCT-Cap specific dependencies
+    - einops>=0.6.1      # Tensor operations
+    - timm>=0.9.2        # PyTorch Image Models
+    - yacs>=0.1.8        # Yet Another Configuration System
+    - tensorboardx>=2.6  # TensorBoard logging
+    - medpy>=0.4.0       # Medical image processing utilities
+
+    # GNN-Cap visualization
+    - pyvis>=0.3.1       # Interactive network visualization
+
+# Post-installation notes:
+#
+# 1. Environment Setup:
+#    # Create environment
+#    conda env create -f environment.yml
+#
+#    # Activate environment
+#    conda activate cap3d-ml
+#
+# 2. KLayout Installation:
+#    KLayout is now included in the environment and should work automatically for
+#    cap3d_generation.py (GDS/DEF → CAP3D conversion). If you encounter issues:
+#      - Ubuntu/Debian: apt install klayout
+#      - macOS: brew install klayout
+#      - Windows: Download from https://www.klayout.de/
+#
+# 3. SPEF Utilities (required for GNN-Cap training):
+#    Build the native Parser-SPEF module:
+#      cd utils
+#      cmake -S spef_bindings -B spef_build
+#      cmake --build spef_build
+#      export PYTHONPATH="$PWD/spef_build:$PYTHONPATH"
+#
+# 4. GPU Support:
+#    For NVIDIA GPU acceleration, ensure CUDA 11.8 is installed:
+#      nvidia-smi  # Check CUDA version
+#    If using a different CUDA version, adjust pytorch-cuda version accordingly.
+#    For CPU-only, replace 'pytorch-cuda=11.8' with 'cpuonly' in dependencies.
+#
+# 5. Verify Installation:
+#    python -c "import torch; print(f'PyTorch: {torch.__version__}')"
+#    python -c "import torch_geometric; print(f'PyG: {torch_geometric.__version__}')"
+#    python -c "import pytorch_lightning; print(f'Lightning: {pytorch_lightning.__version__}')"
+#    python -c "import klayout; print(f'KLayout: {klayout.__version__}')"
+#    python -c "import gmsh; print(f'GMSH: {gmsh.__version__}')"
+#    python -c "import vtk; print(f'VTK: {vtk.vtkVersion.GetVTKVersion()}')"
+#
+# 6. GNN-Cap Quick Start:
+#    # Train total capacitance model (recommended approach)
+#    cd GNN
+#    python train.py --model-type total --epochs 50 --lr 0.005
+#
+#    # Train both total and coupling models
+#    python train.py --model-type both --epochs 50
+#
+# 7. CAP3D Pipeline Quick Start:
+#    # Generate CAP3D from GDS/DEF
+#    klayout -b -zz -r cap3d_generation.py --gds design.gds --def design.def
+#
+#    # Generate training graphs
+#    python GNN/cap3d_to_gnncap.py design.cap3d
+#
+#    # Visualize CAP3D (3D viewer)
+#    python cap3d_view.py design.cap3d

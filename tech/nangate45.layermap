@@ -1,0 +1,27 @@
+# KLayout Layer Map for NanGate45 / FreePDK45
+# Maps GDS layer/datatype numbers to canonical layer names
+# Format: source_layer/datatype : target_name (target_layer/datatype)
+# Only metal layers and vias included (sub-metal1 layers removed)
+
+# Metal layers
+11/0 : metal1 (11/0)
+13/0 : metal2 (13/0)
+15/0 : metal3 (15/0)
+17/0 : metal4 (17/0)
+19/0 : metal5 (19/0)
+21/0 : metal6 (21/0)
+23/0 : metal7 (23/0)
+25/0 : metal8 (25/0)
+27/0 : metal9 (27/0)
+29/0 : metal10 (29/0)
+
+# Via layers
+12/0 : via1 (12/0)
+14/0 : via2 (14/0)
+16/0 : via3 (16/0)
+18/0 : via4 (18/0)
+20/0 : via5 (20/0)
+22/0 : via6 (22/0)
+24/0 : via7 (24/0)
+26/0 : via8 (26/0)
+28/0 : via9 (28/0)

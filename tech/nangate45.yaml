@@ -1,0 +1,54 @@
+# NanGate45 Technology Stack - Unified structure
+# Bottom → top stack with dielectrics and metals interleaved
+
+# Unified stack (bottom → top) - dielectrics and metals interleaved
+stack:
+  - { name: SUBSTRATE, type: dielectric, thickness_um: 0.5, er: 11.9 }
+  - { name: M1_TO_M2_PART1, type: dielectric, thickness_um: 0.12, er: 2.5 }
+  - { name: M1_TO_M2_PART2, type: dielectric, thickness_um: 0.14, er: 2.5 }
+  - { name: metal1, type: metal, thickness_um: 0.13, wmin_um: 0.0733 }
+  - { name: M2_TO_M3_PART1, type: dielectric, thickness_um: 0.12, er: 2.5 }
+  - { name: M2_TO_M3_PART2, type: dielectric, thickness_um: 0.14, er: 2.5 }
+  - { name: metal2, type: metal, thickness_um: 0.14, wmin_um: 0.0197 }
+  - { name: M3_TO_M4_PART1, type: dielectric, thickness_um: 0.12, er: 2.5 }
+  - { name: M3_TO_M4_PART2, type: dielectric, thickness_um: 0.14, er: 2.5 }
+  - { name: metal3, type: metal, thickness_um: 0.14, wmin_um: 0.0246 }
+  - { name: M4_TO_M5_PART1, type: dielectric, thickness_um: 0.12, er: 2.5 }
+  - { name: M4_TO_M5_PART2, type: dielectric, thickness_um: 0.14, er: 2.5 }
+  - { name: metal4, type: metal, thickness_um: 0.28, wmin_um: 0.1416 }
+  - { name: M5_TO_M6_PART1, type: dielectric, thickness_um: 0.29, er: 2.5 }
+  - { name: M5_TO_M6_PART2, type: dielectric, thickness_um: 0.28, er: 2.5 }
+  - { name: metal5, type: metal, thickness_um: 0.28, wmin_um: 0.1416 }
+  - { name: M6_TO_M7_PART1, type: dielectric, thickness_um: 0.29, er: 2.5 }
+  - { name: M6_TO_M7_PART2, type: dielectric, thickness_um: 0.28, er: 2.5 }
+  - { name: metal6, type: metal, thickness_um: 0.28, wmin_um: 0.1416 }
+  - { name: M7_TO_M8_PART1, type: dielectric, thickness_um: 0.29, er: 2.5 }
+  - { name: M7_TO_M8_PART2, type: dielectric, thickness_um: 0.28, er: 2.5 }
+  - { name: metal7, type: metal, thickness_um: 0.8, wmin_um: 0.4047 }
+  - { name: M8_TO_M9_PART1, type: dielectric, thickness_um: 0.82, er: 2.5 }
+  - { name: M8_TO_M9_PART2, type: dielectric, thickness_um: 0.28, er: 2.5 }
+  - { name: metal8, type: metal, thickness_um: 0.8, wmin_um: 0.4047 }
+  - { name: M9_TO_M10_PART1, type: dielectric, thickness_um: 0.82, er: 2.5 }
+  - { name: M9_TO_M10_PART2, type: dielectric, thickness_um: 0.28, er: 2.5 }
+  - { name: metal9, type: metal, thickness_um: 2.0, wmin_um: 0.4047 }
+  - { name: M10_TO_AIR_PART1, type: dielectric, thickness_um: 2.0, er: 2.5 }
+  - { name: M10_TO_AIR_PART2, type: dielectric, thickness_um: 2.0, er: 2.5 }
+  - { name: metal10, type: metal, thickness_um: 2.0, wmin_um: 0.8043 }
+  - { name: TOP_AIR, type: dielectric, thickness_um: 12.0, er: 1.0 }
+
+# Vias with connectivity and minimum widths only
+vias:
+  via1: { from: metal1, to: metal2, wmin_um: 0.0733 }
+  via2: { from: metal2, to: metal3, wmin_um: 0.0733 }
+  via3: { from: metal3, to: metal4, wmin_um: 0.0733 }
+  via4: { from: metal4, to: metal5, wmin_um: 0.1416 }
+  via5: { from: metal5, to: metal6, wmin_um: 0.1416 }
+  via6: { from: metal6, to: metal7, wmin_um: 0.1416 }
+  via7: { from: metal7, to: metal8, wmin_um: 0.4047 }
+  via8: { from: metal8, to: metal9, wmin_um: 0.4047 }
+  via9: { from: metal9, to: metal10, wmin_um: 0.8043 }
+
+metadata:
+  tech_node: nangate45
+  layermap_source: nangate45.layermap
+  description: "NanGate45 technology stack with unified dielectric/metal structure"
