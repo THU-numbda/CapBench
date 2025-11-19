@@ -56,7 +56,8 @@ class DesignInfo:
         self.def_file = def_file
         self.stack_file = f"tech/{tech_node}.yaml"
         self.layermap_file = f"tech/{tech_node}.layermap"
-        self.bounds = None  # (x1, y1, x2, y2) in microns
+        self.bounds = None  # (x1, y1, x2, y2) usable area in microns
+        self.total_bounds = None  # Original DIEAREA bounds (no margin)
 
 
 class MultiSizeWindowGenerator:
@@ -126,8 +127,8 @@ class MultiSizeWindowGenerator:
 
         return designs
 
-    def parse_def_bounds(self, def_file: str) -> Optional[Tuple[float, float, float, float]]:
-        """Extract design boundaries from DEF file"""
+    def parse_def_bounds(self, def_file: str) -> Tuple[Optional[Tuple[float, float, float, float]], Optional[Tuple[float, float, float, float]]]:
+        """Extract usable (with margin) and total design boundaries from DEF file"""
         try:
             with open(def_file, 'r') as f:
                 content = f.read()
@@ -143,6 +144,7 @@ class MultiSizeWindowGenerator:
                 x1, y1, x2, y2 = map(float, diearea_match.groups())
                 # Convert from DEF units to micrometers
                 x1, y1, x2, y2 = x1/units_per_micron, y1/units_per_micron, x2/units_per_micron, y2/units_per_micron
+                total_bounds = (x1, y1, x2, y2)
 
                 # Add 10% margin around edges for window placement
                 margin = 0.10
@@ -155,13 +157,14 @@ class MultiSizeWindowGenerator:
                 y1 += margin_y
                 x2 -= margin_x
                 y2 -= margin_y
+                usable_bounds = (x1, y1, x2, y2)
 
-                return (x1, y1, x2, y2)
+                return usable_bounds, total_bounds
 
         except Exception:
             pass
 
-        return None
+        return None, None
 
     def _create_grid_tiles(self, bounds: Tuple[float, float, float, float], grid_size: int) -> List[Tuple[float, float, float, float]]:
         """Create grid tiles for the design area using the specified grid size"""
@@ -357,8 +360,48 @@ class MultiSizeWindowGenerator:
             # Fall back to absolute path if it's outside the repository
             return str(path_obj)
 
+    @staticmethod
+    def _calculate_area(bounds: Optional[Tuple[float, float, float, float]]) -> Optional[float]:
+        """Return the area for the provided bounds tuple."""
+        if not bounds:
+            return None
+        x1, y1, x2, y2 = bounds
+        area = (x2 - x1) * (y2 - y1)
+        return area if area > 0 else None
+
+    def _calculate_design_area(self, design: DesignInfo) -> Optional[float]:
+        """Determine the total design area (prefers full DIEAREA when available)."""
+        return self._calculate_area(design.total_bounds or design.bounds)
+
+    def _calculate_total_window_area(self, windows_by_size: Dict[str, List[Dict]]) -> float:
+        """Sum the area of all windows across size categories."""
+        total_area = 0.0
+        for windows in windows_by_size.values():
+            for window in windows:
+                width = window.get('width')
+                height = window.get('height')
+                if width is None or height is None:
+                    x1 = window.get('x1', 0)
+                    x2 = window.get('x2', 0)
+                    y1 = window.get('y1', 0)
+                    y2 = window.get('y2', 0)
+                    width = x2 - x1
+                    height = y2 - y1
+                total_area += max(0.0, float(width)) * max(0.0, float(height))
+        return total_area
+
+    @staticmethod
+    def _calculate_coverage_percent(window_area: float, design_area: Optional[float]) -> Optional[float]:
+        """Compute the percentage of design area covered by windows."""
+        if not design_area or design_area <= 0:
+            return None
+        return (window_area / design_area) * 100.0
+
     def _get_original_design_bounds(self, design: DesignInfo) -> Optional[Tuple[float, float, float, float]]:
         """Get original design bounds without margin for visualization"""
+        if design.total_bounds:
+            return design.total_bounds
+
         try:
             with open(design.def_file, 'r') as f:
                 content = f.read()
@@ -374,7 +417,8 @@ class MultiSizeWindowGenerator:
                 x1, y1, x2, y2 = map(float, diearea_match.groups())
                 # Convert from DEF units to micrometers
                 x1, y1, x2, y2 = x1/units_per_micron, y1/units_per_micron, x2/units_per_micron, y2/units_per_micron
-                return (x1, y1, x2, y2)
+                design.total_bounds = (x1, y1, x2, y2)
+                return design.total_bounds
 
         except Exception:
             pass
@@ -656,7 +700,7 @@ class MultiSizeWindowGenerator:
         # Pre-calculate optimal window counts for all designs
         design_counts = {}
         for design in designs:
-            design.bounds = self.parse_def_bounds(design.def_file)
+            design.bounds, design.total_bounds = self.parse_def_bounds(design.def_file)
             if design.bounds:
                 grid_size, optimal_count = self._calculate_optimal_grid_size(design)
                 design_counts[design.full_name] = optimal_count
@@ -691,6 +735,10 @@ class MultiSizeWindowGenerator:
                 small_count = medium_count = large_count = 0
                 total_tiles = 0
 
+            window_area = self._calculate_total_window_area(windows_by_size) if windows_by_size else 0.0
+            design_area = self._calculate_design_area(design)
+            coverage_pct = self._calculate_coverage_percent(window_area, design_area)
+
             summary_rows.append({
                 "design": design.full_name,
                 "tech": design.tech_node,
@@ -699,6 +747,9 @@ class MultiSizeWindowGenerator:
                 "medium": medium_count,
                 "large": large_count,
                 "is_generated": not is_existing,
+                "coverage_pct": coverage_pct,
+                "window_area": window_area,
+                "design_area": design_area,
             })
 
         self._print_summary_table(summary_rows)
@@ -767,13 +818,24 @@ class MultiSizeWindowGenerator:
         if not rows:
             return
 
+        def fmt_pct(value: Optional[float]) -> str:
+            if value is None:
+                return "-"
+            return f"{value:.2f}%"
+
         total_tiles_generated = sum(row["tiles"] for row in rows if row["is_generated"])
+        rows_with_area = [row for row in rows if row.get("design_area")]
+        total_window_area = sum((row.get("window_area") or 0.0) for row in rows_with_area)
+        total_design_area = sum((row.get("design_area") or 0.0) for row in rows_with_area)
         totals = {
             "tiles": sum(row["tiles"] for row in rows),
             "small": sum(row["small"] for row in rows),
             "medium": sum(row["medium"] for row in rows),
             "large": sum(row["large"] for row in rows),
             "generated_tiles": total_tiles_generated,
+            "coverage_pct": self._calculate_coverage_percent(total_window_area, total_design_area),
+            "window_area": total_window_area,
+            "design_area": total_design_area,
         }
         rows = rows + [{
             "design": "TOTAL",
@@ -783,6 +845,9 @@ class MultiSizeWindowGenerator:
             "medium": totals["medium"],
             "large": totals["large"],
             "is_generated": None,
+            "coverage_pct": totals["coverage_pct"],
+            "window_area": total_window_area,
+            "design_area": total_design_area,
         }]
 
         def gen_label(row: Dict[str, object]) -> str:
@@ -800,15 +865,16 @@ class MultiSizeWindowGenerator:
         small_width = max(len("Small"), max(len(str(row["small"])) for row in rows))
         medium_width = max(len("Medium"), max(len(str(row["medium"])) for row in rows))
         large_width = max(len("Large"), max(len(str(row["large"])) for row in rows))
+        coverage_width = max(len("Coverage %"), max(len(fmt_pct(row.get("coverage_pct"))) for row in rows))
 
         header = (
             f"| {'Design':<{design_width}} | {'Tech Node':<{tech_width}} | "
-            f"{'Tiles':>{tiles_width}} | {'Generated':<{gen_width}} | "
+            f"{'Tiles':>{tiles_width}} | {'Coverage %':>{coverage_width}} | {'Generated':<{gen_width}} | "
             f"{'Small':>{small_width}} | {'Medium':>{medium_width}} | {'Large':>{large_width}} |"
         )
         separator = (
             f"|:{'-'*design_width}-|:{'-'*tech_width}-|"
-            f"{'-'*tiles_width}:|{'-'*gen_width}-|"
+            f"{'-'*tiles_width}:|{'-'*coverage_width}:|{'-'*gen_width}-|"
             f"{'-'*small_width}:|{'-'*medium_width}:|{'-'*large_width}:|"
         )
         print(header)
@@ -816,9 +882,10 @@ class MultiSizeWindowGenerator:
 
         for row in rows:
             gen_str = gen_label(row)
+            coverage_str = fmt_pct(row.get("coverage_pct"))
             print(
                 f"| {row['design']:<{design_width}} | {row['tech']:<{tech_width}} | "
-                f"{row['tiles']:>{tiles_width}} | {gen_str:<{gen_width}} | "
+                f"{row['tiles']:>{tiles_width}} | {coverage_str:>{coverage_width}} | {gen_str:<{gen_width}} | "
                 f"{row['small']:>{small_width}} | {row['medium']:>{medium_width}} | {row['large']:>{large_width}} |"
             )
 

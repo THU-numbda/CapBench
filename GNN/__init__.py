@@ -1,14 +1,7 @@
 """
-GNN-Cap: Graph Neural Network for Chip-Scale Capacitance Extraction
-
-Implementation of the IEEE TCAD 2024 paper by Liu et al.
+Simplified GNN-Cap training package.
 """
 
-__version__ = '1.0.0'
-__author__ = 'Implementation based on Liu et al. IEEE TCAD 2024'
+from .models.gnncap_model import GNNCapModel
 
-from . import config
-from .models import gnncap_model
-from .data_utils import dataloader
-
-__all__ = ['config', 'gnncap_model', 'dataloader']
+__all__ = ["GNNCapModel"]

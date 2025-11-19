@@ -1,20 +1,9 @@
 #!/usr/bin/env python3
 """
-GNN-Cap Training - Main Entry Point
+Minimal entry point for training the 2-layer GNN models.
 
-This is the main training script for GNN-Cap capacitance prediction models.
-It uses PyTorch Lightning for simplified, robust training with automatic
-device management, gradient tracking, and logging.
-
-Usage:
-    # Train total capacitance model
-    python train.py --model-type total --epochs 50
-
-    # Train both models
-    python train.py --model-type both --epochs 50
-
-    # Advanced configuration
-    python train.py --model-type total --epochs 100 --lr 0.001 --batch-size 2
+Example:
+    python train.py --conv-type gatv2 --epochs 100 --lr 5e-4
 """
 
 import sys
