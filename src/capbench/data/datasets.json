@@ -23,8 +23,8 @@
       },
       "sources": [
         {
-          "name": "zenodo",
-          "url": "https://zenodo.org/records/17636283/files/nangate45.zip?download=1",
+          "name": "tencent-cos",
+          "url": "https://capbench-1412565472.cos.ap-singapore.myqcloud.com/nangate45.zip",
           "filename": "nangate45.zip",
           "preferred": true
         }
