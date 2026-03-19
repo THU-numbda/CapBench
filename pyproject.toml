@@ -59,23 +59,20 @@ all = [
 capbench = "capbench.cli:main"
 
 [tool.setuptools]
+package-dir = {"" = "src"}
 include-package-data = true
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = [
   "capbench",
   "capbench.*",
-  "common",
-  "common.*",
-  "window_tools",
-  "window_tools.*",
-  "spef_tools",
-  "spef_tools.*",
-  "viewers",
-  "viewers.*",
 ]
 
 [tool.setuptools.package-data]
-common = ["native/*"]
-capbench = ["data/*.json"]
+"capbench" = [
+  "data/*.json",
+  "resources/tech/*",
+  "resources/openrcx/*/*",
+]
+"capbench._internal.common" = ["native/*"]
