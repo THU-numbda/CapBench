@@ -12,6 +12,7 @@ authors = [
   { name = "CapBench contributors" }
 ]
 dependencies = [
+  "klayout",
   "numpy>=1.24",
   "PyYAML>=6.0",
   "tqdm>=4.66",
@@ -34,14 +35,12 @@ vis = [
   "vtk>=9.2",
 ]
 dev = [
-  "klayout",
   "pyvis",
   "rich",
   "rtree",
 ]
 all = [
   "einops",
-  "klayout",
   "matplotlib>=3.7",
   "medpy",
   "monai",
