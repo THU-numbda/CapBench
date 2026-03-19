@@ -28,7 +28,6 @@ from capbench._internal.klayout_compat import pya, require_pya
 from capbench.preprocess.def_parser import (
     parse_def, filter_components_in_window, filter_nets_in_window, parse_lef_macro_sizes, write_def
 )
-from capbench.preprocess.cap3d_generation import DEF2Cap3D
 from capbench.preprocess.converters.pct_cap import convert_window as convert_pct_window
 from capbench.preprocess.converters.cnn_cap import convert_window as convert_cnn_window
 from capbench.preprocess.converters.binary_masks import convert_window as convert_binary_masks_window
@@ -1694,6 +1693,8 @@ class WindowExtractor:
             else:
                 # Need to generate CAP3D
                 try:
+                    from capbench.preprocess.cap3d_generation import DEF2Cap3D
+
                     # Create DEF2Cap3D generator with design-specific files
                     layermap_path = window_entry['layermap_file']
                     if layermap_path is None:
@@ -1951,6 +1952,8 @@ class WindowExtractor:
                 print(f"    Missing clipped GDS/DEF for CAP3D generation: {name}")
             else:
                 try:
+                    from capbench.preprocess.cap3d_generation import DEF2Cap3D
+
                     layermap_path = layermap_file
                     if layermap_path is None:
                         raise RuntimeError(f"No layermap file found for window {name}")

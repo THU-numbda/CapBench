@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Convert DEF+GDS to CAP3D format, preserving DEF net names.
 
