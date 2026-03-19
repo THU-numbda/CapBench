@@ -7,11 +7,14 @@ and filter components/nets to generate windowed DEF files.
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import List, Dict, Tuple, Set, Optional
+from typing import List, Dict, Tuple, Set, Optional, Sequence
 from pathlib import Path
 import re
 from collections import defaultdict
 import math
+
+_POWER_NET_NAMES = {"VDD", "VDDPE", "VPWR", "POWER"}
+_GROUND_NET_NAMES = {"VSS", "VSSPE", "VGND", "GND", "GROUND"}
 
 
 @dataclass
@@ -58,6 +61,107 @@ class Component:
         return self.y
 
 
+def _strip_semicolon(value: str) -> str:
+    value = value.strip()
+    if value.endswith(";"):
+        return value[:-1].strip()
+    return value
+
+
+def parse_lef_macro_sizes(lef_files: Sequence[Path | str]) -> Dict[str, Tuple[float, float]]:
+    """Parse macro SIZE data from one or more LEF files."""
+    macro_sizes: Dict[str, Tuple[float, float]] = {}
+    for lef_file in lef_files:
+        path = Path(lef_file)
+        if not path.exists():
+            continue
+        current_macro: Optional[str] = None
+        in_macro = False
+        with path.open() as handle:
+            for raw_line in handle:
+                line = raw_line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                if not in_macro:
+                    if line.startswith("MACRO "):
+                        current_macro = _strip_semicolon(line[6:])
+                        in_macro = True
+                    continue
+                if line.startswith("SIZE ") and current_macro:
+                    match = re.search(r"SIZE\s+([+-]?[0-9]*\.?[0-9]+)\s+BY\s+([+-]?[0-9]*\.?[0-9]+)", line)
+                    if match:
+                        macro_sizes[current_macro] = (float(match.group(1)), float(match.group(2)))
+                    continue
+                if line.startswith("END "):
+                    end_name = _strip_semicolon(line[4:])
+                    if current_macro and end_name == current_macro:
+                        in_macro = False
+                        current_macro = None
+    return macro_sizes
+
+
+def _apply_component_orientation(point: Tuple[float, float], orient: str) -> Tuple[float, float]:
+    x, y = float(point[0]), float(point[1])
+    orient = str(orient).upper()
+    alias_map = {
+        "R0": "N",
+        "R90": "E",
+        "R180": "S",
+        "R270": "W",
+        "MX": "FS",
+        "MY": "FN",
+        "MYR90": "FE",
+        "MXR90": "FW",
+    }
+    orient = alias_map.get(orient, orient)
+    if orient.startswith("F"):
+        x = -x
+        orient = orient[1:]
+    if orient == "N":
+        return x, y
+    if orient == "S":
+        return -x, -y
+    if orient == "E":
+        return y, -x
+    if orient == "W":
+        return -y, x
+    raise ValueError(f"Unsupported DEF orientation: {orient}")
+
+
+def _component_bbox(
+    component: Component,
+    macro_sizes: Dict[str, Tuple[float, float]],
+) -> Optional[Tuple[float, float, float, float]]:
+    size = macro_sizes.get(component.cell_type)
+    if size is None:
+        return None
+    size_x, size_y = size
+    corners = [
+        _apply_component_orientation((0.0, 0.0), component.orient),
+        _apply_component_orientation((size_x, 0.0), component.orient),
+        _apply_component_orientation((0.0, size_y), component.orient),
+        _apply_component_orientation((size_x, size_y), component.orient),
+    ]
+    bbox_min_x = min(x for x, _ in corners)
+    bbox_min_y = min(y for _, y in corners)
+    xs = [component.x + x - bbox_min_x for x, _ in corners]
+    ys = [component.y + y - bbox_min_y for _, y in corners]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _bboxes_overlap(
+    ax0: float,
+    ay0: float,
+    ax1: float,
+    ay1: float,
+    bx0: float,
+    by0: float,
+    bx1: float,
+    by1: float,
+) -> bool:
+    return not (ax1 <= bx0 or bx1 <= ax0 or ay1 <= by0 or by1 <= ay0)
+
+
 @dataclass
 class NetConnection:
     """Net connection point."""
@@ -81,6 +185,7 @@ class Net:
     connections: List[NetConnection]
     routing: List[RoutingSegment]
     use: str = "SIGNAL"  # SIGNAL, POWER, GROUND, CLOCK, etc.
+    is_special: bool = False
 
     @property
     def is_power(self) -> bool:
@@ -304,16 +409,17 @@ def _parse_via(lines: List[str], start_idx: int, units: int) -> Optional[Via]:
 
     # Collect body until terminating ';'
     body_parts: List[str] = []
-    # If the first line contains more after the name, capture it
+    layers: List[Tuple[str, List[Tuple[float, float, float, float]]]] = []
+
+    # If the first line contains more after the name, capture and parse it too.
     rest = first[first.find(via_name) + len(via_name):].strip()
     if rest:
         body_parts.append(rest)
-        # Single-line definition ends here
         if rest.endswith(';'):
             raw_def = ' '.join(p.strip() for p in body_parts if p).strip()
-            return Via(name=via_name, layers=[], raw_def=raw_def)
-
-    layers: List[Tuple[str, List[Tuple[float, float, float, float]]]] = []
+            if raw_def and not raw_def.endswith(';'):
+                raw_def += ' ;'
+            return Via(name=via_name, layers=layers, raw_def=raw_def or None)
 
     i = start_idx + 1
     while i < len(lines):
@@ -325,16 +431,14 @@ def _parse_via(lines: List[str], start_idx: int, units: int) -> Optional[Via]:
         body_parts.append(s)
 
         if s.startswith('+ RECT'):
-            # + RECT metal1 ( x1 y1 ) ( x2 y2 )
-            tokens = s.split()
-            if len(tokens) >= 9:
+            tokens = s.replace('(', ' ').replace(')', ' ').split()
+            if len(tokens) >= 7:
                 layer = tokens[2]
                 try:
-                    x1 = float(tokens[4]) / units
-                    y1 = float(tokens[5]) / units
-                    x2 = float(tokens[7]) / units
-                    y2 = float(tokens[8]) / units
-                    # Append rectangle to layer entry
+                    x1 = float(tokens[3]) / units
+                    y1 = float(tokens[4]) / units
+                    x2 = float(tokens[5]) / units
+                    y2 = float(tokens[6]) / units
                     if layers and layers[-1][0] == layer:
                         layers[-1][1].append((x1, y1, x2, y2))
                     else:
@@ -371,7 +475,12 @@ def _parse_net(lines: List[str], start_idx: int, units: int, is_special: bool) -
 
     connections = []
     routing = []
-    use = "POWER" if is_special else "SIGNAL"
+    if is_special and net_name.upper() in _GROUND_NET_NAMES:
+        use = "GROUND"
+    elif is_special and net_name.upper() in _POWER_NET_NAMES:
+        use = "POWER"
+    else:
+        use = "POWER" if is_special else "SIGNAL"
 
     # Parse connections on first line
     i = 2
@@ -387,17 +496,20 @@ def _parse_net(lines: List[str], start_idx: int, units: int, is_special: bool) -
 
     # Parse continuation lines
     idx = start_idx + 1
+    route_prefixes = ("+ ROUTED", "NEW ")
+    route_keywords = {
+        "ROUTED", "NEW", "+", "WIDTH", "MASK", "SPACING", "TAPER", "TAPERRULE", "OFFSET",
+    }
+
     while idx < len(lines):
         line = lines[idx].strip()
 
         if line.startswith("+ USE"):
             use = line.split()[2]
-        elif line.startswith("+ ROUTED") or line.startswith("NEW "):
+        elif any(line.startswith(prefix) for prefix in route_prefixes):
             # Parse a routed/new segment: layer and coordinate pairs
             tokens = line.replace('(', ' ( ').replace(')', ' ) ').split()
             # Determine layer: first non-keyword token before first '('
-            known = {"ROUTED", "+", "NEW", "FIXED", "COVER", "SHAPE", "STYLE", "WIDTH",
-                     "MASK", "SPACING", "TAPER", "TAPERRULE", "RECT", "OFFSET"}
             layer = None
             width_val: Optional[float] = None
             # Find index of first coord paren
@@ -410,7 +522,7 @@ def _parse_net(lines: List[str], start_idx: int, units: int, is_special: bool) -
             while i2 < first_paren:
                 t = tokens[i2]
                 tu = t.upper()
-                if tu in known:
+                if tu in route_keywords:
                     i2 += 1
                     continue
                 if layer is None:
@@ -483,7 +595,7 @@ def _parse_net(lines: List[str], start_idx: int, units: int, is_special: bool) -
 
         idx += 1
 
-    net = Net(name=net_name, connections=connections, routing=routing, use=use)
+    net = Net(name=net_name, connections=connections, routing=routing, use=use, is_special=is_special)
     net_parser = NetParser()
     net_parser.end_line = idx
     net.end_line = idx  # Attach end line for parser
@@ -622,21 +734,33 @@ def snap_window_to_grid(window: dict, grid: GridInfo, min_cells_x: int = 3, min_
     }
 
 
-def filter_components_in_window(components: List[Component], window: dict) -> List[Component]:
-    """Filter components that have their centers inside the window.
+def filter_components_in_window(
+    components: List[Component],
+    window: dict,
+    macro_sizes: Optional[Dict[str, Tuple[float, float]]] = None,
+) -> List[Component]:
+    """Filter components that overlap the window.
 
     Args:
         components: List of components
         window: Window with 'x1', 'y1', 'x2', 'y2'
+        macro_sizes: Optional LEF-derived macro sizes in microns
 
     Returns:
-        List of components inside window
+        List of components overlapping the window
     """
     included = []
+    wx0 = float(window['x1'])
+    wy0 = float(window['y1'])
+    wx1 = float(window['x2'])
+    wy1 = float(window['y2'])
     for comp in components:
-        # Use center-based inclusion
-        if (window['x1'] <= comp.center_x <= window['x2'] and
-            window['y1'] <= comp.center_y <= window['y2']):
+        bbox = _component_bbox(comp, macro_sizes or {})
+        if bbox is None:
+            if wx0 <= comp.center_x <= wx1 and wy0 <= comp.center_y <= wy1:
+                included.append(comp)
+            continue
+        if _bboxes_overlap(bbox[0], bbox[1], bbox[2], bbox[3], wx0, wy0, wx1, wy1):
             included.append(comp)
 
     return included

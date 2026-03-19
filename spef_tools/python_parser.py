@@ -17,10 +17,10 @@ based on the ``*C_UNIT`` header line.
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional, Tuple, Union
-from collections import defaultdict
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -270,35 +270,58 @@ def load_ground_and_coupling(path: Union[str, Path]) -> Tuple[Dict[str, float], 
     return ground, coupling
 
 
-def _extract_net_name(node: Optional[str]) -> str:
-    """Extract the net portion from a SPEF node identifier."""
+def _resolve_coupling_endpoint(node: Optional[str], known_nets: set[str]) -> str:
+    """Resolve a coupling endpoint token back to an exact net name when possible."""
     if not node:
         return ""
     token = node.strip()
-    # Split on common delimiters (pin, bus, hierarchy)
-    for sep in (":", "/", "\\", "[", "(", "."):
-        if sep in token:
-            return token.split(sep, 1)[0]
-    return token
+    if token in known_nets:
+        return token
+
+    for sep in (":", "/", "\\"):
+        if sep not in token:
+            continue
+        base = token.split(sep, 1)[0]
+        if base in known_nets:
+            return base
+
+    return ""
 
 
 def load_coupling_pairs(path: Union[str, Path]) -> Dict[Tuple[str, str], float]:
-    """Return aggregated coupling capacitance per unordered net pair."""
+    """Return aggregated coupling capacitance per unordered net pair.
+
+    When a simplified SPEF mirrors the same pair into both nets' ``*CAP`` tables,
+    average the per-direction values so the returned value still represents a
+    single unordered pair capacitance.
+    """
     spef = parse_spef(path)
-    pair_caps: Dict[Tuple[str, str], float] = defaultdict(float)
+    known_nets = set(spef.nets)
+    pair_directionals: Dict[Tuple[str, str], Dict[str, float]] = defaultdict(dict)
 
     for net in spef.nets.values():
         net_name = net.name
+        per_net_pair_caps: Dict[Tuple[str, str], float] = defaultdict(float)
         for entry in net.cap_entries:
             if not entry.is_coupling:
                 continue
-            other_net = _extract_net_name(entry.node_b)
+            other_net = _resolve_coupling_endpoint(entry.node_b, known_nets)
             if not other_net or other_net == net_name:
                 continue
             key = tuple(sorted((net_name, other_net)))
-            pair_caps[key] += entry.value_f
+            per_net_pair_caps[key] += entry.value_f
 
-    return dict(pair_caps)
+        for key, value_f in per_net_pair_caps.items():
+            pair_directionals[key][net_name] = float(value_f)
+
+    pair_caps: Dict[Tuple[str, str], float] = {}
+    for key, directional in pair_directionals.items():
+        values = list(directional.values())
+        if not values:
+            continue
+        pair_caps[key] = float(sum(values) / len(values))
+
+    return pair_caps
 
 
 def detect_solver(header: Dict[str, str]) -> Optional[str]:

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Analyze dataset statistics: blocks, conductors, and files per dataset."""
 
-import re
 import json
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+import re
 from collections import defaultdict
+from pathlib import Path
+from typing import Dict, List, Tuple
+
 import numpy as np
 
 def parse_cap3d_blocks(cap3d_path: Path) -> Tuple[int, int, Dict[str, int], List[str]]:
@@ -71,41 +72,6 @@ def parse_cap3d_blocks(cap3d_path: Path) -> Tuple[int, int, Dict[str, int], List
 
     return total_blocks, len(net_names), dict(conductor_counts), list(net_names)
 
-def parse_graph_nodes(graph_path: Path) -> Tuple[int, Dict[str, int]]:
-    """
-    Parse a PyTorch Geometric graph file and count nodes/conductors.
-
-    Returns:
-        Tuple of (total_nodes, layer_counts)
-    """
-    if not graph_path.exists():
-        return 0, {}
-
-    try:
-        import torch
-        data = torch.load(graph_path)
-
-        # Count nodes
-        if hasattr(data, 'num_nodes'):
-            total_nodes = data.num_nodes
-        elif hasattr(data, 'x'):
-            total_nodes = data.x.shape[0]
-        else:
-            total_nodes = 0
-
-        # Try to get layer information if available
-        layer_counts = {}
-        if hasattr(data, 'layer') and data.layer is not None:
-            unique_layers, counts = torch.unique(data.layer, return_counts=True)
-            for layer_id, count in zip(unique_layers.tolist(), counts.tolist()):
-                layer_counts[str(layer_id)] = count
-
-        return total_nodes, layer_counts
-
-    except Exception as e:
-        print(f"Warning: Error loading graph {graph_path}: {e}")
-        return 0, {}
-
 def analyze_dataset_structure(base_path: Path) -> Dict:
     """Analyze the structure and statistics of a dataset."""
     dataset_info = {
@@ -113,7 +79,6 @@ def analyze_dataset_structure(base_path: Path) -> Dict:
         'technology': base_path.parent.name,
         'size': base_path.name,
         'cap3d_files': [],
-        'graph_files': [],
         'window_directories': [],
         'directories': []
     }
@@ -129,25 +94,10 @@ def analyze_dataset_structure(base_path: Path) -> Dict:
         cap3d_files = list(cap3d_dir.glob("*.cap3d"))
         dataset_info['cap3d_files'] = [f.name for f in cap3d_files]
 
-    # Look for graph files in graphs directory
-    graphs_dir = base_path / "graphs"
-    if graphs_dir.exists():
-        graph_files = list(graphs_dir.glob("*.pt"))
-        dataset_info['graph_files'].extend([f"graphs/{f.name}" for f in graph_files])
-
     # Look for window directories (W0, W1, etc.)
     window_dirs = [d for d in base_path.iterdir() if d.is_dir() and re.match(r'^W\d+$', d.name)]
     window_dirs.sort(key=lambda x: int(x.name[1:]))  # Sort by window number
     dataset_info['window_directories'] = [d.name for d in window_dirs]
-
-    # Look for graph files in window directories
-    for window_dir in window_dirs:
-        graph_files = list(window_dir.glob("*.pt"))
-        dataset_info['graph_files'].extend([f"{window_dir.name}/{f.name}" for f in graph_files])
-
-    # Also look for top-level graph files
-    top_graphs = list(base_path.glob("*.pt"))
-    dataset_info['graph_files'].extend([f.name for f in top_graphs])
 
     return dataset_info
 
@@ -231,80 +181,8 @@ def count_blocks_and_conductors(base_path: Path) -> Dict:
             stats['min_conductors_per_file'] = 0
             stats['max_conductors_per_file'] = 0
 
-    # If no CAP3D files, try to analyze graph files
     else:
-        # Look for graphs directory
-        graphs_dir = base_path / "graphs"
-        graph_files = []
-
-        if graphs_dir.exists():
-            graph_files = list(graphs_dir.glob("*.pt"))
-
-        # Also look for window directories with graph files
-        window_dirs = [d for d in base_path.iterdir() if d.is_dir() and re.match(r'^W\d+$', d.name)]
-
-        if graph_files or window_dirs:
-            stats['analysis_method'] = 'Graph'
-            total_dataset_nodes = 0
-            total_dataset_layers = defaultdict(int)
-            nodes_per_file = []
-
-            if graph_files:
-                print(f"  Found {len(graph_files)} graph files in graphs/ directory")
-                for i, graph_file in enumerate(graph_files):
-                    if i % 100 == 0 and i > 0:
-                        print(f"    Processed {i} graph files...")
-
-                    nodes, layer_counts = parse_graph_nodes(graph_file)
-                    total_dataset_nodes += nodes
-                    nodes_per_file.append(nodes)
-
-                    for layer, count in layer_counts.items():
-                        total_dataset_layers[layer] += count
-
-            if window_dirs:
-                print(f"  Found {len(window_dirs)} window directories with graphs")
-                for window_dir in window_dirs:
-                    window_graph_files = list(window_dir.glob("*.pt"))
-                    if window_graph_files:
-                        window_total = 0
-                        window_layers = defaultdict(int)
-
-                        for graph_file in window_graph_files:
-                            nodes, layer_counts = parse_graph_nodes(graph_file)
-                            window_total += nodes
-                            nodes_per_file.append(nodes)
-
-                            for layer, count in layer_counts.items():
-                                window_layers[layer] += count
-                                total_dataset_layers[layer] += count
-
-                        total_dataset_nodes += window_total
-                        stats['window_stats'][window_dir.name] = {
-                            'total_nodes': window_total,
-                            'layer_counts': dict(window_layers),
-                            'graph_files': len(window_graph_files)
-                        }
-
-            stats['total_blocks'] = total_dataset_nodes  # Use nodes as blocks for graphs
-            stats['total_conductors'] = sum(total_dataset_layers.values())
-            stats['layer_distribution'] = dict(total_dataset_layers)
-            stats['files_processed'] = len(graph_files) + sum(len(list(d.glob("*.pt"))) for d in window_dirs)
-            stats['blocks_per_file'] = nodes_per_file
-
-            # Calculate statistics
-            if nodes_per_file:
-                stats['avg_blocks_per_file'] = np.mean(nodes_per_file)
-                stats['std_blocks_per_file'] = np.std(nodes_per_file)
-                stats['median_blocks_per_file'] = np.median(nodes_per_file)
-                stats['min_blocks_per_file'] = np.min(nodes_per_file)
-                stats['max_blocks_per_file'] = np.max(nodes_per_file)
-            else:
-                stats['avg_blocks_per_file'] = 0
-                stats['std_blocks_per_file'] = 0
-                stats['median_blocks_per_file'] = 0
-                stats['min_blocks_per_file'] = 0
-                stats['max_blocks_per_file'] = 0
+        stats['analysis_method'] = 'Unavailable'
 
     return stats
 
@@ -377,7 +255,6 @@ def main():
         print(f"  Min-Max blocks per file: {stats.get('min_blocks_per_file', 0):,} - {stats.get('max_blocks_per_file', 0):,}")
         print(f"  Min-Max conductors per file: {stats.get('min_conductors_per_file', 0):,} - {stats.get('max_conductors_per_file', 0):,}")
         print(f"  CAP3D files: {len(stats['cap3d_files'])}")
-        print(f"  Graph files: {len(stats['graph_files'])}")
         print(f"  Window directories: {len(stats['window_directories'])}")
 
         if stats['layer_distribution']:
@@ -433,13 +310,6 @@ def main():
             print(f"    Avg conductors per file: {stats.get('avg_conductors_per_file', 0):.1f} ± {stats.get('std_conductors_per_file', 0):.1f}")
             print(f"    Blocks per file range: {stats.get('min_blocks_per_file', 0):,} - {stats.get('max_blocks_per_file', 0):,}")
             print(f"    Conductors per file range: {stats.get('min_conductors_per_file', 0):,} - {stats.get('max_conductors_per_file', 0):,}")
-
-            if stats['window_stats']:
-                print(f"    Window breakdown:")
-                for window, window_stats in sorted(stats['window_stats'].items(),
-                                                  key=lambda x: int(x[0][1:]) if x[0][1:].isdigit() else x[0]):
-                    print(f"      {window}: {window_stats['total_nodes']:,} nodes, "
-                          f"{window_stats['graph_files']} graphs")
 
     # Save detailed results to JSON
     output_file = Path("dataset_statistics.json")

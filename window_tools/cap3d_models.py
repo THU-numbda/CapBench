@@ -102,6 +102,7 @@ class PolyElement:
     v2: np.ndarray
     hvector: np.ndarray
     coordinates: List[Tuple[float, float]]  # from <coord> tag
+    section_type: Optional[str] = None  # "conductor" or "medium"
 
     @property
     def bounds(self) -> Tuple[np.ndarray, np.ndarray]:
@@ -164,4 +165,3 @@ class ParsedCap3DData:
     window: Optional[Window]
     task: Optional[Task]
     stats: Dict[str, Union[int, float, bool]] 
-

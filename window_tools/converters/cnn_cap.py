@@ -29,7 +29,7 @@ import sys
 import argparse
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Set
+from typing import Dict, List, Tuple, Optional, Sequence, Set
 from collections import defaultdict
 import yaml
 from datetime import datetime
@@ -41,21 +41,32 @@ from common.tech_parser import get_conductor_layers, match_layers_by_height
 from common.datasets import get_dataset_subdirs
 
 
+DEFAULT_TARGET_SIZE = 224
+SCALED_TARGET_SIZES = {
+    "small": 128,
+    "medium": 256,
+    "large": 512,
+}
+
+
 class DensityMapGenerator:
     """Generate CNNCap-compatible density maps from CAP3D files"""
 
-    def __init__(self, cap3d_file: str, tech_file: str, pixel_resolution: float = None):
+    def __init__(self, cap3d_file: str, tech_file: str, pixel_resolution: float = None, target_size: int = 224):
         """
         Initialize density map generator
 
         Args:
             cap3d_file: Path to CAP3D file
             tech_file: Path to technology stack YAML file
-            pixel_resolution: Microns per pixel (auto-computed for 224x224 grid)
+            pixel_resolution: Microns per pixel (auto-computed for the selected grid size)
+            target_size: Square output grid size in pixels
         """
         self.cap3d_file = Path(cap3d_file)
         self.tech_file = Path(tech_file)
-        self.target_size = 224  # Fixed ResNet size
+        self.target_size = int(target_size)
+        if self.target_size <= 0:
+            raise ValueError(f"target_size must be positive, got {self.target_size}")
         self.pixel_resolution = pixel_resolution
 
         # Tech file data
@@ -150,11 +161,11 @@ class DensityMapGenerator:
         if not self.window:
             self._compute_bounds_from_blocks()
 
-        # Compute grid dimensions - fixed 224x224
+        # Compute grid dimensions for the selected square output size
         width_um = self.x_max - self.x_min
         height_um = self.y_max - self.y_min
 
-        # Auto-compute pixel resolution to fit 224x224 grid
+        # Auto-compute pixel resolution to fit the chosen grid
         if self.pixel_resolution is None:
             # Use max dimension to determine resolution
             max_dim = max(width_um, height_um)
@@ -162,6 +173,68 @@ class DensityMapGenerator:
 
         self.width_pixels = self.target_size
         self.height_pixels = self.target_size
+
+    def set_raster_bounds(
+        self,
+        x_min: float,
+        y_min: float,
+        x_max: float,
+        y_max: float,
+        *,
+        pixel_resolution: float | None = None,
+    ) -> None:
+        if not np.isfinite([x_min, y_min, x_max, y_max]).all():
+            raise ValueError("Raster bounds must be finite.")
+        if x_max <= x_min or y_max <= y_min:
+            raise ValueError(f"Invalid raster bounds: {(x_min, y_min, x_max, y_max)}")
+
+        self.x_min = float(x_min)
+        self.y_min = float(y_min)
+        self.x_max = float(x_max)
+        self.y_max = float(y_max)
+
+        width_um = self.x_max - self.x_min
+        height_um = self.y_max - self.y_min
+        if pixel_resolution is None:
+            max_dim = max(width_um, height_um)
+            self.pixel_resolution = max_dim / self.target_size
+        else:
+            self.pixel_resolution = float(pixel_resolution)
+
+        self.width_pixels = self.target_size
+        self.height_pixels = self.target_size
+
+    def compute_conductor_bounds(self, selected_layers: Optional[Sequence[str]] = None) -> Tuple[float, float, float, float]:
+        layer_filter = set(selected_layers) if selected_layers is not None else None
+        x_coords: List[float] = []
+        y_coords: List[float] = []
+
+        for layer_name, blocks in self.blocks_by_layer.items():
+            if layer_filter is not None and layer_name not in layer_filter:
+                continue
+            for block in blocks:
+                if not block.parent_name or block.parent_name not in self.conductor_names:
+                    continue
+
+                bp = block.base
+                v1 = block.v1
+                v2 = block.v2
+                x_coords.extend([
+                    bp[0],
+                    bp[0] + v1[0],
+                    bp[0] + v2[0],
+                    bp[0] + v1[0] + v2[0],
+                ])
+                y_coords.extend([
+                    bp[1],
+                    bp[1] + v1[1],
+                    bp[1] + v2[1],
+                    bp[1] + v1[1] + v2[1],
+                ])
+
+        if not x_coords or not y_coords:
+            raise ValueError(f"No conductor geometry found in {self.cap3d_file} for selected layers {selected_layers}")
+        return min(x_coords), min(y_coords), max(x_coords), max(y_coords)
 
     def match_layers(self):
         """Match CAP3D layers to tech file layers by z-height"""
@@ -612,9 +685,24 @@ Examples:
 
     parser.add_argument('inputs', nargs='+', help='Input CAP3D file(s)')
     parser.add_argument('-t', '--tech', required=True, help='Technology stack YAML file (required)')
-    parser.add_argument('-o', '--output', help='Output NPZ file or directory (default: data/<window>.npz for each input)')
+    parser.add_argument(
+        '-o',
+        '--output',
+        help='Output NPZ file or directory (default: dataset density_maps/ or density_maps_scaled/)',
+    )
     parser.add_argument('-r', '--resolution', type=float, default=None,
-                       help='Pixel resolution in microns (auto-computed for 224x224 grid)')
+                       help='Pixel resolution in microns (auto-computed for the selected grid size)')
+    parser.add_argument(
+        '--target-size',
+        type=int,
+        default=None,
+        help='Explicit square output grid size in pixels (default: 224, or size-aware with --scaled-output)',
+    )
+    parser.add_argument(
+        '--scaled-output',
+        action='store_true',
+        help='Write size-aware grids to density_maps_scaled/ using small=128, medium=256, large=512',
+    )
     parser.add_argument('--plot', action='store_true', help='Generate coarse-grid plots for each processed window')
     parser.add_argument('--plot-dir', help='Directory to write plot PNGs (default: output directory)')
     parser.add_argument('--coarse-size', type=int, default=30,
@@ -654,7 +742,17 @@ Examples:
         pbar.set_postfix_str(f"Window: {window_key}")
 
         try:
-            generator = DensityMapGenerator(str(cap3d_path), str(tech_path), pixel_resolution=args.resolution)
+            resolved_target_size = _resolve_target_size(
+                cap3d_path,
+                target_size=args.target_size,
+                scaled_output=args.scaled_output,
+            )
+            generator = DensityMapGenerator(
+                str(cap3d_path),
+                str(tech_path),
+                pixel_resolution=args.resolution,
+                target_size=resolved_target_size,
+            )
             generator.tech_conductor_layers = list(tech_layers)
             generator.tech_z_heights = dict(tech_z_heights)
 
@@ -669,7 +767,8 @@ Examples:
                     window_output_npz = Path(args.output) / f'{window_key}.npz'
             else:
                 window_dirs = _resolve_dataset_dirs(cap3d_path)
-                window_output_npz = window_dirs['density_maps'] / f'{window_key}.npz'
+                output_key = 'density_maps_scaled' if args.scaled_output else 'density_maps'
+                window_output_npz = window_dirs[output_key] / f'{window_key}.npz'
 
             window_output_npz.parent.mkdir(parents=True, exist_ok=True)
 
@@ -717,6 +816,39 @@ def _resolve_dataset_dirs(cap3d_path: Path, dataset_dirs: Optional[Dict[str, Pat
     return get_dataset_subdirs(dataset_base)
 
 
+def _infer_window_size_bucket(cap3d_path: Path) -> Optional[str]:
+    """Infer the window size bucket from the dataset path."""
+    for part in reversed(Path(cap3d_path).parts):
+        normalized = str(part).lower()
+        if normalized in SCALED_TARGET_SIZES:
+            return normalized
+    return None
+
+
+def _resolve_target_size(
+    cap3d_path: Path,
+    *,
+    target_size: Optional[int],
+    scaled_output: bool,
+) -> int:
+    if target_size is not None:
+        size = int(target_size)
+        if size <= 0:
+            raise ValueError(f"target_size must be positive, got {size}")
+        return size
+
+    if scaled_output:
+        size_bucket = _infer_window_size_bucket(cap3d_path)
+        if size_bucket is None:
+            raise ValueError(
+                f"Could not infer size bucket from path '{cap3d_path}'. "
+                f"Expected one of {sorted(SCALED_TARGET_SIZES)} in the dataset path."
+            )
+        return SCALED_TARGET_SIZES[size_bucket]
+
+    return DEFAULT_TARGET_SIZE
+
+
 def _normalize_layer_name(name: str) -> str:
     """Normalize layer names for tolerant matching."""
     return ''.join(ch for ch in str(name).lower() if ch.isalnum())
@@ -733,6 +865,9 @@ def convert_window(
     coarse_size: int = 30,
     dpi: int = 150,
     dataset_dirs: Optional[Dict[str, Path]] = None,
+    target_size: Optional[int] = None,
+    scaled_output: bool = False,
+    selected_layers: Optional[Sequence[str]] = None,
 ) -> Path:
     """
     Generate a CNNCap density map NPZ (and optional plot) for a window.
@@ -746,6 +881,8 @@ def convert_window(
         plot_dir: Directory for visualization PNGs (default: alongside NPZ).
         coarse_size: Coarse grid resolution for visualization.
         dpi: DPI for visualization PNGs.
+        target_size: Optional explicit square output grid size.
+        scaled_output: Whether to infer 128/256/512 by size bucket and default to density_maps_scaled/.
 
     Returns:
         Path to the generated NPZ.
@@ -756,13 +893,28 @@ def convert_window(
 
     # Determine dataset directories, defaulting to the CAP3D file's dataset
     dataset_dirs = _resolve_dataset_dirs(cap3d_path, dataset_dirs)
+    resolved_target_size = _resolve_target_size(
+        cap3d_path,
+        target_size=target_size,
+        scaled_output=scaled_output,
+    )
     if output_npz is None:
-        output_npz = dataset_dirs['density_maps'] / f"{cap3d_path.stem}.npz"
+        output_key = "density_maps_scaled" if scaled_output else "density_maps"
+        output_npz = dataset_dirs[output_key] / f"{cap3d_path.stem}.npz"
 
     output_npz.parent.mkdir(parents=True, exist_ok=True)
 
-    generator = DensityMapGenerator(str(cap3d_path), str(tech_path), pixel_resolution=pixel_resolution)
+    generator = DensityMapGenerator(
+        str(cap3d_path),
+        str(tech_path),
+        pixel_resolution=pixel_resolution,
+        target_size=resolved_target_size,
+    )
     tech_layers, tech_z_heights = get_conductor_layers(str(tech_path))
+    if selected_layers is not None:
+        requested = {_normalize_layer_name(layer) for layer in selected_layers}
+        tech_layers = [layer for layer in tech_layers if _normalize_layer_name(layer) in requested]
+        tech_z_heights = {layer: tech_z_heights[layer] for layer in tech_layers}
     generator.tech_conductor_layers = list(tech_layers)
     generator.tech_z_heights = dict(tech_z_heights)
 

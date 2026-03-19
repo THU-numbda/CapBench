@@ -20,53 +20,51 @@ from datetime import datetime
 import re
 import time
 import gc
+import traceback
 from tqdm import tqdm
 import pya
 import psutil
 
 from window_tools.def_parser import (
-    parse_def,filter_components_in_window, filter_nets_in_window, write_def
+    parse_def, filter_components_in_window, filter_nets_in_window, parse_lef_macro_sizes, write_def
 )
 from window_tools.cap3d_generation import DEF2Cap3D
 from window_tools.converters.pct_cap import convert_window as convert_pct_window
 from window_tools.converters.cnn_cap import convert_window as convert_cnn_window
+from window_tools.converters.binary_masks import convert_window as convert_binary_masks_window
 from common.datasets import (
     extract_process_node_from_path,
     find_tech_stack_for_process_node,
     find_layermap_for_process_node,
     get_dataset_subdirs,
 )
-from common.tech_parser import get_all_layers_with_limit
+from common.tech_parser import get_all_layers_with_limit, get_conductor_layers
 
 STAGE_LABELS = {
     'gds': 'GDS/DEF',
     'cap3d': 'CAP3D',
     'pct': 'PCT point clouds',
     'cnn': 'CNN density maps',
-    'gnn': 'GNN graphs',
+    'binary_masks': 'U-Net binary masks',
 }
 
-STAGE_PRINT_ORDER = ['gds', 'cap3d', 'cnn', 'gnn', 'pct']
+STAGE_PRINT_ORDER = ['gds', 'cap3d', 'cnn', 'binary_masks', 'pct']
 
-_GNN_CONVERTER = None
+DEFAULT_LAYER_LIMITS = {
+    'nangate45': {
+        'small': {'bottom': 'metal1', 'top': 'metal4'},
+        'medium': {'bottom': 'metal1', 'top': 'metal7'},
+        'large': {'bottom': 'metal1', 'top': 'metal7'},
+    },
+    'sky130hd': {
+        'small': {'bottom': 'li1', 'top': 'met4'},
+        'medium': {'bottom': 'li1', 'top': 'met5'},
+        'large': {'bottom': 'li1', 'top': 'met5'},
+    },
+}
 
-
-def _get_gnn_converter():
-    """Lazily import the GNN converter to avoid torch dependency when unused."""
-    global _GNN_CONVERTER
-    if _GNN_CONVERTER is not None:
-        return _GNN_CONVERTER
-
-    try:
-        from window_tools.converters.gnn_cap import convert_window as convert_gnn_window
-    except ImportError as exc:
-        raise RuntimeError(
-            "GNN conversion requested but its dependencies are unavailable. "
-            "Install the torch/torch-geometric stack to enable it."
-        ) from exc
-
-    _GNN_CONVERTER = convert_gnn_window
-    return _GNN_CONVERTER
+def _normalize_layer_key(value: Optional[str]) -> str:
+    return ''.join(ch for ch in str(value).lower() if ch.isalnum()) if value else ''
 
 class WindowExtractor:
     """Extract windows from GDS+DEF designs using KLayout + DEF filtering"""
@@ -86,7 +84,7 @@ class WindowExtractor:
         self.process_node = process_node
         self.tech_stack_file = tech_stack_file
         self.layermap_file = Path(layermap_file) if layermap_file else None
-        self.pipeline_stages = pipeline_stages or ['cap3d', 'cnn', 'gnn', 'pct']
+        self.pipeline_stages = pipeline_stages or ['cap3d', 'cnn', 'binary_masks', 'pct']
         self.rebase_origin = True
         self.group_with_l2n = True
         self.use_default_net_names = use_default_net_names
@@ -96,7 +94,7 @@ class WindowExtractor:
             return stage in self.pipeline_stages
         self.should_run_stage = should_run_stage
 
-        # Downstream-only runs (cnn/gnn/pct) can reuse existing CAP3D artifacts without raw layout files
+        # Downstream-only runs (cnn/pct) can reuse existing CAP3D artifacts without raw layout files
         self.requires_layout_inputs = self.should_run_stage('cap3d')
 
         # Get dataset-specific directories
@@ -144,6 +142,7 @@ class WindowExtractor:
         self._def_cache: Dict[Path, Any] = {}
         self._l2n_cache: Dict[Tuple[Path, Path], Dict[str, Any]] = {}  # (gds_path, layermap_file) -> l2n_data
         self._layer_mapping_cache: Dict[int, Dict[str, List[int]]] = {}  # layout_id -> layer mappings
+        self._lef_macro_size_cache: Dict[Tuple[str, ...], Dict[str, Tuple[float, float]]] = {}
 
         # Load multi-design configuration
         self.designs = self.load_multi_design_yaml()
@@ -220,8 +219,19 @@ class WindowExtractor:
             'cap3d': self.cap3d_output_dir / f"{window_name}.cap3d",
             'pct': self.dataset_dirs['point_clouds'] / f"{window_name}.npz",
             'cnn': self.dataset_dirs['density_maps'] / f"{window_name}.npz",
-            'gnn': self.dataset_dirs['graphs'] / f"{window_name}.pt",
+            'binary_masks': self.dataset_dirs['binary_masks'] / f"{window_name}.npz",
         }
+
+    def _load_lef_macro_sizes(self, stack_file: Path, tech_node: Optional[str]) -> Dict[str, Tuple[float, float]]:
+        lef_files = tuple(self._resolve_lef_files(stack_file, tech_node))
+        if not lef_files:
+            return {}
+        cached = self._lef_macro_size_cache.get(lef_files)
+        if cached is not None:
+            return cached
+        macro_sizes = parse_lef_macro_sizes(lef_files)
+        self._lef_macro_size_cache[lef_files] = macro_sizes
+        return macro_sizes
 
     def _determine_stage_activity(self) -> Dict[str, bool]:
         """Return a map of pipeline stages that should run this session."""
@@ -230,7 +240,7 @@ class WindowExtractor:
             'cap3d': self.should_run_stage('cap3d'),
             'pct': self.should_run_stage('pct'),
             'cnn': self.should_run_stage('cnn'),
-            'gnn': self.should_run_stage('gnn'),
+            'binary_masks': self.should_run_stage('binary_masks'),
         }
 
     def _initialize_stage_counters(self, total_windows: int) -> Dict[str, Dict[str, int]]:
@@ -262,8 +272,8 @@ class WindowExtractor:
                 self.stage_counters['pct']['existing_pre'] += 1
             if 'cnn' in self.stage_counters and outputs['cnn'].exists():
                 self.stage_counters['cnn']['existing_pre'] += 1
-            if 'gnn' in self.stage_counters and outputs['gnn'].exists():
-                self.stage_counters['gnn']['existing_pre'] += 1
+            if 'binary_masks' in self.stage_counters and outputs['binary_masks'].exists():
+                self.stage_counters['binary_masks']['existing_pre'] += 1
 
     def _stage_label(self, stage: str) -> str:
         return STAGE_LABELS.get(stage, stage.upper())
@@ -317,7 +327,7 @@ class WindowExtractor:
         else:
             print("  GDS stage disabled (cap3d stage not selected).")
 
-        for stage in ['cap3d', 'cnn', 'gnn', 'pct']:
+        for stage in ['cap3d', 'cnn', 'binary_masks', 'pct']:
             if stage not in self.stage_counters:
                 continue
             stats = self.stage_counters[stage]
@@ -372,6 +382,7 @@ class WindowExtractor:
         self._def_cache.clear()
         self._l2n_cache.clear()
         self._layer_mapping_cache.clear()
+        self._lef_macro_size_cache.clear()
 
         # Force garbage collection to release memory
         gc.collect()
@@ -391,8 +402,8 @@ class WindowExtractor:
         with self.multi_yaml_file.open() as f:
             data = yaml.safe_load(f)
 
-        # Extract layer limits if present
-        self.layer_limits = data.get('layer_limits', {})
+        # Extract layer limits if present, otherwise use dataset defaults.
+        self.layer_limits = data.get('layer_limits') or DEFAULT_LAYER_LIMITS
 
         designs = data.get('designs', [])
         if not designs:
@@ -460,6 +471,7 @@ class WindowExtractor:
                     'name': global_window_name,
                     'design_name': design_name,
                     'original_name': window_name,  # Keep original YAML name for reference
+                    'size_category': window.get('size_category'),
                     'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
                     'gds_file': gds_path,
                     'def_file': def_path,
@@ -545,7 +557,7 @@ class WindowExtractor:
                         layer_name = name
                         break
 
-                layer_name_key = layer_name.lower() if isinstance(layer_name, str) else None
+                layer_name_key = _normalize_layer_key(layer_name) if isinstance(layer_name, str) else None
 
                 # Include if it's an allowed conductor layer
                 if layer_name_key not in allowed_layers:
@@ -597,6 +609,82 @@ class WindowExtractor:
 
         # Simple GDS write without aggressive optimization to avoid "under construction" issues
         target.write(str(output_gds))
+
+    def _resolve_layer_limit_spec(
+        self,
+        tech_node: Optional[str],
+        size_category: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        if not tech_node or not size_category:
+            return None
+
+        tech_key = _normalize_layer_key(tech_node)
+        size_key = _normalize_layer_key(size_category)
+        if not tech_key or not size_key:
+            return None
+
+        for raw_tech, raw_limit in (self.layer_limits or {}).items():
+            if _normalize_layer_key(raw_tech) != tech_key:
+                continue
+            if not isinstance(raw_limit, dict):
+                return None
+            for raw_size, raw_spec in raw_limit.items():
+                if _normalize_layer_key(raw_size) == size_key and isinstance(raw_spec, dict):
+                    return raw_spec
+            return None
+        return None
+
+    def _resolve_selected_layers_for_window(self, window_entry: Dict[str, Any]) -> Optional[List[str]]:
+        tech_node = window_entry.get('tech_node')
+        size_category = window_entry.get('size_category')
+        stack_file = window_entry.get('stack_file')
+        if not tech_node or not size_category or not stack_file:
+            return None
+
+        limit_spec = self._resolve_layer_limit_spec(tech_node, size_category)
+        if not limit_spec:
+            return None
+
+        bottom_name = (
+            limit_spec.get('bottom')
+            or limit_spec.get('lower')
+            or limit_spec.get('from')
+            or limit_spec.get('min_layer')
+        )
+        top_name = (
+            limit_spec.get('top')
+            or limit_spec.get('upper')
+            or limit_spec.get('to')
+            or limit_spec.get('max_layer')
+        )
+        if not bottom_name or not top_name:
+            return None
+
+        conductor_layers, _ = get_conductor_layers(str(stack_file))
+        normalized_layers = [_normalize_layer_key(layer) for layer in conductor_layers]
+        bottom_key = _normalize_layer_key(bottom_name)
+        top_key = _normalize_layer_key(top_name)
+
+        if bottom_key not in normalized_layers:
+            raise ValueError(
+                f"Bottom layer '{bottom_name}' is not present in {stack_file} "
+                f"for tech={tech_node} size={size_category}"
+            )
+        if top_key not in normalized_layers:
+            raise ValueError(
+                f"Top layer '{top_name}' is not present in {stack_file} "
+                f"for tech={tech_node} size={size_category}"
+            )
+
+        start_idx = normalized_layers.index(bottom_key)
+        end_idx = normalized_layers.index(top_key)
+        if start_idx > end_idx:
+            raise ValueError(
+                f"Invalid layer limit ordering for tech={tech_node} size={size_category}: "
+                f"{bottom_name} is above {top_name}"
+            )
+
+        return conductor_layers[start_idx:end_idx + 1]
 
     # ===== L2N-guided grouping helpers =====
     @staticmethod
@@ -1626,64 +1714,76 @@ class WindowExtractor:
                     print(f"    CAP3D generation failed for {name}: {e}")
                     continue
 
-            # Common downstream conversion logic (runs for both new and existing CAP3D files)
-            # Only run if we have a valid CAP3D file and requested pipeline stages
-            if cap3d_path.exists():
-                self._run_downstream_conversions(window_entry, cap3d_path)
+            # Common downstream conversion logic:
+            # - binary_masks runs from the window DEF
+            # - cnn/pct continue to use CAP3D when available
+            if cap3d_path.exists() or outputs['def'].exists():
+                self._run_downstream_conversions(window_entry, outputs['def'], cap3d_path)
 
-    def _run_downstream_conversions(self, window_entry: Dict[str, Any], cap3d_path: Path) -> None:
-        """Run optional conversion stages (PCT/CNN/GNN) for an existing CAP3D file."""
+    def _run_downstream_conversions(self, window_entry: Dict[str, Any], def_path: Path, cap3d_path: Path) -> None:
+        """Run optional conversion stages using the available per-window artifacts."""
         name = window_entry['name']
         outputs = window_entry.get('outputs') or self._build_output_paths(name)
-
-        if not cap3d_path.exists():
-            print(f"    CAP3D file not found for {name}: {cap3d_path}")
-            return
+        selected_layers = self._resolve_selected_layers_for_window(window_entry)
+        lef_files = self._resolve_lef_files(window_entry['stack_file'], window_entry.get('tech_node'))
 
         if self._should_run_conversion_stage('pct', outputs['pct']):
-            try:
-                print(f"    Converting to PCT: {name}")
-                convert_pct_window(
-                    cap3d_path,
-                    dataset_dirs=self.dataset_dirs,
-                )
-                self._record_stage_generated('pct')
-            except Exception as e:
-                print(f"    PCT conversion failed for {name}: {e}")
+            if not cap3d_path.exists():
+                print(f"    CAP3D file not found for PCT conversion: {name}: {cap3d_path}")
+            else:
+                try:
+                    print(f"    Converting to PCT: {name}")
+                    convert_pct_window(
+                        cap3d_path,
+                        dataset_dirs=self.dataset_dirs,
+                    )
+                    self._record_stage_generated('pct')
+                except Exception as e:
+                    print(f"    PCT conversion failed for {name}: {e}")
+                    print(traceback.format_exc(), end="")
 
         if self._should_run_conversion_stage('cnn', outputs['cnn']):
-            try:
-                convert_cnn_window(
-                    cap3d_path,
-                    window_entry['stack_file'],
-                    dataset_dirs=self.dataset_dirs,
-                )
-                self._record_stage_generated('cnn')
-            except Exception as e:
-                print(f"    CNN conversion failed for {name}: {e}")
+            if not cap3d_path.exists():
+                print(f"    CAP3D file not found for CNN conversion: {name}: {cap3d_path}")
+            else:
+                try:
+                    convert_cnn_window(
+                        cap3d_path,
+                        window_entry['stack_file'],
+                        dataset_dirs=self.dataset_dirs,
+                        selected_layers=selected_layers,
+                    )
+                    self._record_stage_generated('cnn')
+                except Exception as e:
+                    print(f"    CNN conversion failed for {name}: {e}")
+                    print(traceback.format_exc(), end="")
 
-        if self._should_run_conversion_stage('gnn', outputs['gnn']):
-            try:
-                gnn_converter = _get_gnn_converter()
-                gnn_converter(
-                    cap3d_path,
-                    window_entry['stack_file'],
-                    dataset_dirs=self.dataset_dirs,
-                )
-                self._record_stage_generated('gnn')
-            except Exception as e:
-                print(f"    GNN conversion failed for {name}: {e}")
+        if self._should_run_conversion_stage('binary_masks', outputs['binary_masks']):
+            if not def_path.exists():
+                print(f"    DEF file not found for binary-masks conversion: {name}: {def_path}")
+            else:
+                try:
+                    convert_binary_masks_window(
+                        def_path,
+                        window_entry['stack_file'],
+                        dataset_dirs=self.dataset_dirs,
+                        selected_layers=selected_layers,
+                        lef_files=[Path(path) for path in lef_files],
+                    )
+                    self._record_stage_generated('binary_masks')
+                except Exception as e:
+                    print(f"    Binary-masks conversion failed for {name}: {e}")
+                    print(traceback.format_exc(), end="")
 
-    
     def _process_window(self, window_entry: Dict[str, Any]) -> None:
         name = window_entry['name']
         design_name = window_entry['design_name']
         outputs = window_entry.get('outputs') or self._build_output_paths(name)
         cap3d_path = outputs['cap3d']
 
-        # For downstream-only runs, skip expensive extraction steps and reuse existing CAP3D artifacts.
+        # For downstream-only runs, skip extraction and reuse existing per-window DEF/CAP3D artifacts.
         if not self.should_run_stage('cap3d'):
-            self._run_downstream_conversions(window_entry, cap3d_path)
+            self._run_downstream_conversions(window_entry, outputs['def'], cap3d_path)
             return
 
         # Get design-specific file paths
@@ -1721,8 +1821,13 @@ class WindowExtractor:
             global_min_width, layer_min_widths, layer_name_map, layer_z_heights = self.load_precomputed_widths(
                 stack_file, layermap_file, tech_node
             )
+            selected_layers = self._resolve_selected_layers_for_window(window_entry)
+            selected_layer_keys = (
+                {_normalize_layer_key(layer) for layer in selected_layers}
+                if selected_layers else None
+            )
 
-            # Extract GDS window without layer filtering (retain all geometry)
+            # Extract the requested conductor stack and keep the existing always-ignore layers excluded.
             ignored_gds_layers: Set[int] = set()
             try:
                 layermap_data = self._load_layermap(layermap_file)
@@ -1733,8 +1838,14 @@ class WindowExtractor:
             except Exception:
                 pass
 
-            # Extract GDS window (needed for CAP3D generation) but skip width validation
-            self.extract_gds_window_klayout(window_entry, gds_out, None, None, ignored_gds_layers)
+            # Extract only the configured conductor stack for this tech/size bucket.
+            self.extract_gds_window_klayout(
+                window_entry,
+                gds_out,
+                selected_layer_keys,
+                selected_layer_keys,
+                ignored_gds_layers,
+            )
             removed_count = 0  # Skip width validation
 
             # Handle DEF data based on whether we're using default net names
@@ -1745,7 +1856,12 @@ class WindowExtractor:
                 windowed_nets = []
                 windowed_specialnets = []
             else:
-                windowed_components = filter_components_in_window(def_data.components, adjusted_window)
+                macro_sizes = self._load_lef_macro_sizes(stack_file, tech_node)
+                windowed_components = filter_components_in_window(
+                    def_data.components,
+                    adjusted_window,
+                    macro_sizes=macro_sizes,
+                )
                 component_names = {comp.name for comp in windowed_components}
 
                 windowed_nets = filter_nets_in_window(def_data.nets, component_names, adjusted_window)
@@ -1789,6 +1905,7 @@ class WindowExtractor:
                         "conflicts": 0,
                     }
                     print(f"    Failed to regroup nets with L2N for {name}: {e}", file=sys.stderr, flush=True)
+                    print(traceback.format_exc(), end="", file=sys.stderr, flush=True)
 
             post_sig = len(windowed_nets)
             post_spc = len(windowed_specialnets)
@@ -1822,39 +1939,39 @@ class WindowExtractor:
         else:
             self._record_stage_skipped('gds')
 
-        # Generate CAP3D file immediately for this window (required for CNN/GNN/PCT)
+        # Generate CAP3D file immediately for this window (required for CNN/PCT).
         cap3d_exists = cap3d_path.exists()
 
         if not cap3d_exists:
             if not gds_out.exists() or not def_out.exists():
                 print(f"    Missing clipped GDS/DEF for CAP3D generation: {name}")
-                return
-            try:
-                layermap_path = layermap_file
-                if layermap_path is None:
-                    raise RuntimeError(f"No layermap file found for window {name}")
-                generator = DEF2Cap3D(
-                    gds_file=str(gds_out),
-                    def_file=str(def_out),
-                    stack_file=str(stack_file),
-                    layermap_file=str(layermap_path),
-                    output_file=str(cap3d_path),
-                    process_node=tech_node,
-                    lef_files=self._resolve_lef_files(stack_file, tech_node),
-                )
-                generator.run()
-                if not cap3d_path.exists():
-                    print(f"    ✗ CAP3D file not found: {cap3d_path}")
-                    return
-                self._record_stage_generated('cap3d')
-                cap3d_exists = True
-            except Exception as e:
-                print(f"    CAP3D generation failed for {name}: {e}")
+            else:
+                try:
+                    layermap_path = layermap_file
+                    if layermap_path is None:
+                        raise RuntimeError(f"No layermap file found for window {name}")
+                    generator = DEF2Cap3D(
+                        gds_file=str(gds_out),
+                        def_file=str(def_out),
+                        stack_file=str(stack_file),
+                        layermap_file=str(layermap_path),
+                        output_file=str(cap3d_path),
+                        process_node=tech_node,
+                        lef_files=self._resolve_lef_files(stack_file, tech_node),
+                    )
+                    generator.run()
+                    if not cap3d_path.exists():
+                        print(f"    ✗ CAP3D file not found: {cap3d_path}")
+                    else:
+                        self._record_stage_generated('cap3d')
+                        cap3d_exists = True
+                except Exception as e:
+                    print(f"    CAP3D generation failed for {name}: {e}")
+                    print(traceback.format_exc(), end="")
         else:
             self._record_stage_skipped('cap3d')
 
-        if cap3d_exists:
-            self._run_downstream_conversions(window_entry, cap3d_path)
+        self._run_downstream_conversions(window_entry, def_out, cap3d_path)
 
         if ran_layout:
             try:
@@ -1940,6 +2057,7 @@ class WindowExtractor:
                 except Exception as e:
                     self._update_progress(failed=True)
                     print(f"  Failed to process window {window_entry['name']}: {e}")
+                    print(traceback.format_exc(), end="")
 
                 # Update progress bar
                 if pbar:
@@ -2016,9 +2134,9 @@ Examples:
 
   # Run only specific pipeline stages
   python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline cap3d cnn
-  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline gnn
+  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline binary_masks
   python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline pct
-  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline cnn gnn
+  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline cnn binary_masks pct
         '''
     )
 
@@ -2026,8 +2144,8 @@ Examples:
                        help='Multi-design YAML file with file paths and window coordinates')
     parser.add_argument('--dataset-path', type=str,
                        help='Dataset directory path for windows (default: directory containing the windows YAML)')
-    parser.add_argument('--pipeline', type=str, nargs='+', choices=['cap3d', 'cnn', 'gnn', 'pct'], default=['cap3d', 'cnn', 'gnn', 'pct'],
-                       help='Pipeline stages to run (default: all stages). Choose from: cap3d, cnn, gnn, pct')
+    parser.add_argument('--pipeline', type=str, nargs='+', choices=['cap3d', 'cnn', 'binary_masks', 'pct'], default=['cap3d', 'cnn', 'binary_masks', 'pct'],
+                       help='Pipeline stages to run (default: all stages). Choose from: cap3d, cnn, binary_masks, pct')
     parser.add_argument('--default-net-names', action='store_true',
                        help='Skip DEF→GDS net matching and assign sequential net names (faster).')
     

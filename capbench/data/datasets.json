@@ -1,0 +1,34 @@
+{
+  "datasets": [
+    {
+      "id": "nangate45/small",
+      "version": "2026-03-19",
+      "description": "Small Nangate45 CapBench dataset with cached downloads and optional preprocessed artifacts.",
+      "process_node": "nangate45",
+      "path_parts": ["nangate45", "small"],
+      "windows_file": "windows.yaml",
+      "bundled_artifacts": [
+        "cap3d",
+        "def",
+        "gds",
+        "windows.yaml",
+        "density_maps",
+        "binary-masks",
+        "labels_rwcap"
+      ],
+      "derivable_artifacts": {
+        "density_maps": "cnn",
+        "binary-masks": "binary_masks",
+        "point_clouds": "pct"
+      },
+      "sources": [
+        {
+          "name": "zenodo",
+          "url": "https://zenodo.org/records/17636283/files/nangate45.zip?download=1",
+          "filename": "nangate45.zip",
+          "preferred": true
+        }
+      ]
+    }
+  ]
+}

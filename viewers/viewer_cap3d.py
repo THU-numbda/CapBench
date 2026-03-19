@@ -135,6 +135,15 @@ def _color_for_block(blk) -> Tuple[int, int, int]:
     else:
         raise ValueError(f"Block {blk} has invalid layer attribute: {layer_id} (type: {type(layer_id)})")
 
+
+def _dielectric_visual_style(er: float) -> Tuple[float, float, float, float]:
+    """Map dielectric constant to a consistent color/opacity palette."""
+    if er <= 2.0:
+        return 0.2, 0.4, 0.8, 0.15
+    if er <= 4.0:
+        return 0.2, 0.7, 0.3, 0.25
+    return 0.9, 0.4, 0.2, 0.35
+
 def _group_key_for_layer(blk) -> str:
     """Group by metal layer if available; otherwise by Z height bucket.
 
@@ -451,24 +460,7 @@ def _build_dielectric_blocks(parsed_data, conductor_blocks: list, window_bounds:
     colors.SetNumberOfComponents(3)
     colors.SetName("DielectricColors")
 
-    # Create a color palette for dielectrics based on dielectric constant
-    dielectric_colors = []
-    for i in range(len(dielectric_levels) - 1):
-        # Map dielectric constant to color (lower = more transparent blue, higher = more opaque orange)
-        er = dielectric_levels[i][1]
-        if er <= 2.0:
-            # Low-k dielectrics - blue tones, more transparent
-            r, g, b = 0.2, 0.4, 0.8
-            opacity = 0.15
-        elif er <= 4.0:
-            # Medium-k dielectrics - green tones, medium transparency
-            r, g, b = 0.2, 0.7, 0.3
-            opacity = 0.25
-        else:
-            # High-k dielectrics - orange/red tones, less transparent
-            r, g, b = 0.9, 0.4, 0.2
-            opacity = 0.35
-        dielectric_colors.append((r, g, b, opacity))
+    dielectric_colors = [_dielectric_visual_style(level[1]) for level in dielectric_levels[:-1]]
 
     # Build dielectric blocks
     block_count = 0
@@ -594,6 +586,240 @@ def _build_dielectric_blocks(parsed_data, conductor_blocks: list, window_bounds:
     if block_count > 0:
         print(f"Created {block_count} 3D dielectric blocks with intersection highlighting")
     return composite_actor
+
+
+def _build_conformal_dielectric_actor(
+    blocks: list,
+    *,
+    use_instanced: bool = True,
+    max_blocks: int = 200000,
+) -> Optional['vtk.vtkActor']:
+    """Build an actor for explicit CAP3D <medium> blocks."""
+    import vtk
+
+    medium_blocks = [blk for blk in blocks if getattr(blk, 'type', 'conductor') == 'medium']
+    if not medium_blocks:
+        return None
+
+    def _configure_actor(actor: 'vtk.vtkActor') -> 'vtk.vtkActor':
+        prop = actor.GetProperty()
+        prop.SetOpacity(0.26)
+        prop.LightingOn()
+        prop.SetInterpolationToPhong()
+        prop.SetDiffuse(0.85)
+        prop.SetSpecular(0.08)
+        prop.SetSpecularPower(12.0)
+        prop.BackfaceCullingOn()
+        prop.SetEdgeVisibility(0)
+        actor.SetPickable(0)
+        return actor
+
+    def _build_classic() -> Optional['vtk.vtkActor']:
+        points = vtk.vtkPoints()
+        if hasattr(points, 'SetDataTypeToFloat'):
+            points.SetDataTypeToFloat()
+        polys = vtk.vtkCellArray()
+        colors = vtk.vtkUnsignedCharArray()
+        colors.SetName("colors")
+        colors.SetNumberOfComponents(3)
+
+        block_count = 0
+        for blk in medium_blocks:
+            if block_count >= max_blocks:
+                break
+            (x1, y1, z1), (x2, y2, z2) = _block_to_bounds(blk)
+            r, g, b, _ = _dielectric_visual_style(float(getattr(blk, 'diel', 1.0) or 1.0))
+            rgb = (int(round(r * 255.0)), int(round(g * 255.0)), int(round(b * 255.0)))
+
+            i0 = points.InsertNextPoint(x1, y1, z1)
+            i1 = points.InsertNextPoint(x2, y1, z1)
+            i2 = points.InsertNextPoint(x2, y2, z1)
+            i3 = points.InsertNextPoint(x1, y2, z1)
+            i4 = points.InsertNextPoint(x1, y1, z2)
+            i5 = points.InsertNextPoint(x2, y1, z2)
+            i6 = points.InsertNextPoint(x2, y2, z2)
+            i7 = points.InsertNextPoint(x1, y2, z2)
+            tri_faces = [
+                (i0, i1, i2), (i0, i2, i3),
+                (i4, i6, i5), (i4, i7, i6),
+                (i0, i5, i1), (i0, i4, i5),
+                (i3, i2, i6), (i3, i6, i7),
+                (i0, i3, i7), (i0, i7, i4),
+                (i1, i5, i6), (i1, i6, i2),
+            ]
+            for a, b_idx, c in tri_faces:
+                polys.InsertNextCell(3)
+                polys.InsertCellPoint(a)
+                polys.InsertCellPoint(b_idx)
+                polys.InsertCellPoint(c)
+                colors.InsertNextTuple3(*rgb)
+            block_count += 1
+
+        if polys.GetNumberOfCells() == 0:
+            return None
+
+        poly_data = vtk.vtkPolyData()
+        poly_data.SetPoints(points)
+        poly_data.SetPolys(polys)
+
+        normals = vtk.vtkPolyDataNormals()
+        normals.SetInputData(poly_data)
+        normals.ComputeCellNormalsOn()
+        normals.ComputePointNormalsOff()
+        normals.SplittingOff()
+        normals.ConsistencyOn()
+        normals.AutoOrientNormalsOn()
+        normals.Update()
+
+        out_poly = normals.GetOutput()
+        out_poly.GetCellData().SetScalars(colors)
+
+        try:
+            mapper = vtk.vtkStaticPolyDataMapper()
+        except Exception:
+            mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputData(out_poly)
+        if hasattr(mapper, 'SetInterpolateScalarsBeforeMapping'):
+            mapper.SetInterpolateScalarsBeforeMapping(0)
+        if hasattr(mapper, 'SetColorModeToDirectScalars'):
+            mapper.SetColorModeToDirectScalars()
+        if hasattr(mapper, 'SetScalarModeToUseCellData'):
+            mapper.SetScalarModeToUseCellData()
+        else:
+            mapper.SetScalarModeToUseCellFieldData()
+            mapper.SelectColorArray("colors")
+        mapper.SetScalarVisibility(1)
+
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        return _configure_actor(actor)
+
+    def _build_instanced() -> Optional['vtk.vtkActor']:
+        centers = vtk.vtkPoints()
+        if hasattr(centers, 'SetDataTypeToFloat'):
+            centers.SetDataTypeToFloat()
+        scale_arr = vtk.vtkFloatArray()
+        scale_arr.SetName("scale")
+        scale_arr.SetNumberOfComponents(3)
+        colors_arr = vtk.vtkUnsignedCharArray()
+        colors_arr.SetName("colors")
+        colors_arr.SetNumberOfComponents(3)
+
+        block_count = 0
+        for blk in medium_blocks:
+            if block_count >= max_blocks:
+                break
+            (x1, y1, z1), (x2, y2, z2) = _block_to_bounds(blk)
+            cx = 0.5 * (x1 + x2)
+            cy = 0.5 * (y1 + y2)
+            cz = 0.5 * (z1 + z2)
+            sx = abs(x2 - x1)
+            sy = abs(y2 - y1)
+            sz = abs(z2 - z1)
+            r, g, b, _ = _dielectric_visual_style(float(getattr(blk, 'diel', 1.0) or 1.0))
+
+            centers.InsertNextPoint(cx, cy, cz)
+            scale_arr.InsertNextTuple3(sx, sy, sz)
+            colors_arr.InsertNextTuple3(
+                int(round(r * 255.0)),
+                int(round(g * 255.0)),
+                int(round(b * 255.0)),
+            )
+            block_count += 1
+
+        if centers.GetNumberOfPoints() == 0:
+            return None
+
+        inst_pd = vtk.vtkPolyData()
+        inst_pd.SetPoints(centers)
+        inst_pd.GetPointData().SetScalars(colors_arr)
+        if hasattr(inst_pd.GetPointData(), 'SetActiveScalars'):
+            inst_pd.GetPointData().SetActiveScalars("colors")
+        if hasattr(inst_pd.GetPointData(), 'SetVectors'):
+            inst_pd.GetPointData().SetVectors(scale_arr)
+        else:
+            inst_pd.GetPointData().AddArray(scale_arr)
+
+        cube = vtk.vtkCubeSource()
+        cube.SetXLength(1.0)
+        cube.SetYLength(1.0)
+        cube.SetZLength(1.0)
+        cube.SetCenter(0.0, 0.0, 0.0)
+        cube.Update()
+
+        normals = vtk.vtkPolyDataNormals()
+        normals.SetInputConnection(cube.GetOutputPort())
+        normals.ComputeCellNormalsOn()
+        normals.ComputePointNormalsOff()
+        normals.SplittingOff()
+        normals.ConsistencyOn()
+        normals.AutoOrientNormalsOn()
+
+        try:
+            mapper = vtk.vtkGlyph3DMapper()
+            mapper.SetInputData(inst_pd)
+            mapper.SetSourceConnection(normals.GetOutputPort())
+            if hasattr(mapper, 'OrientOff'):
+                mapper.OrientOff()
+            if hasattr(mapper, 'SetScaling'):
+                mapper.SetScaling(True)
+            if hasattr(mapper, 'SetScaleFactor'):
+                mapper.SetScaleFactor(1.0)
+            if hasattr(mapper, 'SetScaleModeToScaleByComponents'):
+                mapper.SetScaleModeToScaleByComponents()
+            else:
+                raise RuntimeError('Glyph3DMapper lacks component scaling')
+            try:
+                from vtkmodules.vtkCommonDataModel import vtkDataObject
+                if hasattr(mapper, 'SetScaleArray'):
+                    try:
+                        mapper.SetScaleArray(vtkDataObject.FIELD_ASSOCIATION_POINTS, "scale")
+                    except TypeError:
+                        mapper.SetScaleArray("scale")
+            except Exception:
+                if hasattr(mapper, 'SetScaleArray'):
+                    mapper.SetScaleArray("scale")
+            if hasattr(mapper, 'SetColorModeToDirectScalars'):
+                mapper.SetColorModeToDirectScalars()
+            mapper.SetScalarModeToUsePointData()
+            mapper.SetScalarVisibility(1)
+
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            return _configure_actor(actor)
+        except Exception:
+            glyph = vtk.vtkGlyph3D()
+            glyph.SetInputData(inst_pd)
+            glyph.SetSourceConnection(normals.GetOutputPort())
+            if hasattr(glyph, 'OrientOff'):
+                glyph.OrientOff()
+            if hasattr(glyph, 'SetVectorModeToUseVector'):
+                glyph.SetVectorModeToUseVector()
+            if hasattr(glyph, 'SetScaleModeToScaleByVectorComponents'):
+                glyph.SetScaleModeToScaleByVectorComponents()
+            if hasattr(glyph, 'SetScaleFactor'):
+                glyph.SetScaleFactor(1.0)
+            if hasattr(glyph, 'ClampingOff'):
+                glyph.ClampingOff()
+            glyph.Update()
+
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputConnection(glyph.GetOutputPort())
+            if hasattr(mapper, 'SetColorModeToDirectScalars'):
+                mapper.SetColorModeToDirectScalars()
+            mapper.SetScalarModeToUsePointData()
+            mapper.SetScalarVisibility(1)
+
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            return _configure_actor(actor)
+
+    actor = _build_instanced() if use_instanced else _build_classic()
+    if actor is None and use_instanced:
+        actor = _build_classic()
+    if actor is not None:
+        print(f"Created conformal dielectric actor from {min(len(medium_blocks), max_blocks)} explicit medium blocks")
+    return actor
 
 
 def visualize_cap3d_vtk(
@@ -1285,10 +1511,9 @@ def visualize_cap3d_vtk(
         extra = f" tris={c_stats.get('tris')}" if mode == 'classic' else f" instances={c_stats.get('instances')}"
         print(f"[STATS] mode={mode} blocks={num_blocks}{extra} build_time={dt:.3f}s mem_increase={memd:.1f}MB")
 
-    # Mediums are not rendered per-block; instead we add a translucent
-    # window-sized box to hint the simulation domain.
+    conformal_dielectric_actor = None
 
-    # Add a translucent window box representing the medium domain
+    # Add a translucent window box representing the plate-dielectric domain
     window_actor = None
     lines_actor = None
     ground_actor = None
@@ -1427,15 +1652,23 @@ def visualize_cap3d_vtk(
         except Exception:
             pass
 
+    conformal_dielectric_actor = _build_conformal_dielectric_actor(
+        blocks,
+        use_instanced=use_instanced,
+        max_blocks=max_blocks,
+    )
+    if conformal_dielectric_actor is not None:
+        renderer.AddActor(conformal_dielectric_actor)
+
     # dielectric_actor_ref is now properly set within the window creation block above
 
-    # Keyboard toggle 'm' to hide/show substrate conductor, spanning elements, layer marks, window, and dielectric blocks
-    # Default view: hidden (same as pressing 'M' once)
-    # When enabled: shows window with layer lines + dielectric intersection highlights + substrate/spanning elements
+    # Keyboard toggle 'm' hides/shows the existing plate/window dielectric overlay.
+    # Keyboard toggle 'c' hides/shows explicit conformal medium blocks.
 
     
     if 'iren' in locals():
         toggle_state = {'on': False}
+        conformal_toggle_state = {'on': False}
 
         def _toggle_state(new_on: bool):
             toggle_state['on'] = new_on
@@ -1457,13 +1690,25 @@ def visualize_cap3d_vtk(
                 ground_actor.SetVisibility(1 if new_on else 0)
             renWin.Render()
 
+        def _toggle_conformal_state(new_on: bool):
+            conformal_toggle_state['on'] = new_on
+            if conformal_dielectric_actor is not None:
+                conformal_dielectric_actor.SetVisibility(1 if new_on else 0)
+            renWin.Render()
+
         def _key_cb(obj, evt):
             key = iren.GetKeySym()
-            if key and key.lower() == 'm':
+            if not key:
+                return
+            lower_key = key.lower()
+            if lower_key == 'm':
                 _toggle_state(not toggle_state['on'])
+            elif lower_key == 'c':
+                _toggle_conformal_state(not conformal_toggle_state['on'])
 
         # Apply default hidden state
         _toggle_state(False)
+        _toggle_conformal_state(False)
         iren.AddObserver('KeyPressEvent', _key_cb)
 
         # Hover highlighting system
@@ -1634,6 +1879,7 @@ def visualize_cap3d_vtk(
         print(f"Screenshot saved to: {screenshot_path}")
         return
 
+    print("Controls: M toggles dielectric/window overlay, C toggles conformal dielectrics")
     iren.Initialize()
     iren.Start()
 

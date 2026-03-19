@@ -17,6 +17,25 @@ from typing import List, Dict, Tuple, Any
 import yaml
 
 
+def _load_tech_yaml(tech_file_path: str) -> Dict[str, Any]:
+    tech_path = Path(tech_file_path)
+
+    if not tech_path.exists():
+        raise FileNotFoundError(f"Tech file not found: {tech_file_path}")
+
+    with tech_path.open('r') as f:
+        tech_data = yaml.safe_load(f)
+
+    if not tech_data or 'stack' not in tech_data:
+        raise ValueError(f"Invalid tech file format: missing 'stack' key in {tech_file_path}")
+
+    stack_data = tech_data['stack']
+    if not isinstance(stack_data, list):
+        raise ValueError(f"Invalid tech file format: 'stack' must be a list in {tech_file_path}")
+
+    return tech_data
+
+
 def get_conductor_layers(tech_file_path: str) -> Tuple[List[str], Dict[str, float]]:
     """
     Extract conductor layers from technology stack YAML file.
@@ -51,22 +70,8 @@ def get_conductor_layers(tech_file_path: str) -> Tuple[List[str], Dict[str, floa
         >>> z_heights['M1']
         0.058
     """
-    tech_path = Path(tech_file_path)
-
-    if not tech_path.exists():
-        raise FileNotFoundError(f"Tech file not found: {tech_file_path}")
-
-    # Parse YAML file
-    with tech_path.open('r') as f:
-        tech_data = yaml.safe_load(f)
-
-    if not tech_data or 'stack' not in tech_data:
-        raise ValueError(f"Invalid tech file format: missing 'stack' key in {tech_file_path}")
-
+    tech_data = _load_tech_yaml(tech_file_path)
     stack_data = tech_data['stack']
-
-    if not isinstance(stack_data, list):
-        raise ValueError(f"Invalid tech file format: 'stack' must be a list in {tech_file_path}")
 
     # Extract conductor layers and compute z-heights
     metal_layers = []
@@ -127,6 +132,79 @@ def get_conductor_layers(tech_file_path: str) -> Tuple[List[str], Dict[str, floa
     return conductor_layers, z_heights
 
 
+def get_metal_layers(tech_file_path: str) -> List[str]:
+    """
+    Extract metal-only layers from a technology stack YAML file in stack order.
+
+    Args:
+        tech_file_path: Path to technology stack YAML file
+
+    Returns:
+        List of metal layer names in bottom-to-top order
+    """
+    tech_data = _load_tech_yaml(tech_file_path)
+    stack_data = tech_data['stack']
+
+    metals: List[str] = []
+    for layer_entry in stack_data:
+        if not isinstance(layer_entry, dict):
+            raise ValueError(f"Invalid layer entry format: {layer_entry}")
+        layer_name = layer_entry.get('name')
+        layer_type = layer_entry.get('type')
+        if not layer_name or not layer_type:
+            raise ValueError(f"Invalid layer entry: missing name or type: {layer_entry}")
+        if str(layer_type).lower() == 'metal':
+            metals.append(str(layer_name))
+
+    if not metals:
+        raise ValueError(f"No metal layers found in tech file: {tech_file_path}")
+
+    return metals
+
+
+def get_metal_layers_and_min_widths(tech_file_path: str) -> Tuple[List[str], Dict[str, float]]:
+    """
+    Extract metal-only layers in stack order and min-width data in a single YAML read.
+
+    Args:
+        tech_file_path: Path to technology stack YAML file
+
+    Returns:
+        Tuple of:
+            - metal layer names in bottom-to-top order
+            - dictionary mapping metal or via name -> minimum width in microns
+    """
+    tech_data = _load_tech_yaml(tech_file_path)
+    stack_data = tech_data['stack']
+
+    metals: List[str] = []
+    min_widths: Dict[str, float] = {}
+    for layer_entry in stack_data:
+        if not isinstance(layer_entry, dict):
+            raise ValueError(f"Invalid layer entry format: {layer_entry}")
+        layer_name = layer_entry.get('name')
+        layer_type = layer_entry.get('type')
+        if not layer_name or not layer_type:
+            raise ValueError(f"Invalid layer entry: missing name or type: {layer_entry}")
+        if str(layer_type).lower() == 'metal':
+            layer_name = str(layer_name)
+            metals.append(layer_name)
+            wmin_um = layer_entry.get('wmin_um')
+            if wmin_um is not None:
+                min_widths[layer_name] = float(wmin_um)
+
+    vias_data = tech_data.get('vias', {})
+    if isinstance(vias_data, dict):
+        for via_name, via_def in vias_data.items():
+            if isinstance(via_def, dict) and via_def.get('wmin_um') is not None:
+                min_widths[str(via_name)] = float(via_def['wmin_um'])
+
+    if not metals:
+        raise ValueError(f"No metal layers found in tech file: {tech_file_path}")
+
+    return metals, min_widths
+
+
 def get_layer_min_widths(tech_file_path: str) -> Dict[str, float]:
     """
     Extract minimum width values for conductor layers from technology stack YAML file.
@@ -141,22 +219,8 @@ def get_layer_min_widths(tech_file_path: str) -> Dict[str, float]:
         FileNotFoundError: If tech file doesn't exist
         ValueError: If tech file format is invalid
     """
-    tech_path = Path(tech_file_path)
-
-    if not tech_path.exists():
-        raise FileNotFoundError(f"Tech file not found: {tech_file_path}")
-
-    # Parse YAML file
-    with tech_path.open('r') as f:
-        tech_data = yaml.safe_load(f)
-
-    if not tech_data or 'stack' not in tech_data:
-        raise ValueError(f"Invalid tech file format: missing 'stack' key in {tech_file_path}")
-
+    tech_data = _load_tech_yaml(tech_file_path)
     stack_data = tech_data['stack']
-
-    if not isinstance(stack_data, list):
-        raise ValueError(f"Invalid tech file format: 'stack' must be a list in {tech_file_path}")
 
     # Extract minimum widths for conductor layers
     min_widths = {}

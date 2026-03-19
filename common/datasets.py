@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Dict, Optional
 
 import yaml
 
 # Root dataset directories
-DATASET_ROOT = Path("datasets")
 REPO_ROOT = Path(__file__).resolve().parents[1]
+DATASET_ROOT = Path(os.environ.get("CAPBENCH_DATASET_ROOT", "datasets")).expanduser()
+TECH_ROOT = REPO_ROOT / "tech"
 
 # Dataset subdirectories (will be resolved relative to specific dataset paths)
 def get_dataset_subdirs(dataset_path: Optional[Path] = None) -> Dict[str, Path]:
@@ -29,11 +31,13 @@ def get_dataset_subdirs(dataset_path: Optional[Path] = None) -> Dict[str, Path]:
 
     return {
         'cap3d': base_path / "cap3d",
+        'cap3d_split': base_path / "cap3d_split",
         'gds': base_path / "gds",
         'def': base_path / "def",
-        'graphs': base_path / "graphs",
         'point_clouds': base_path / "point_clouds",
         'density_maps': base_path / "density_maps",
+        'binary_masks': base_path / "binary-masks",
+        'density_maps_scaled': base_path / "density_maps_scaled",
         'labels_rwcap': base_path / "labels_rwcap",
         'labels_raphael': base_path / "labels_raphael",
         'manifests': base_path / "manifests",
@@ -41,9 +45,9 @@ def get_dataset_subdirs(dataset_path: Optional[Path] = None) -> Dict[str, Path]:
 
 # Fallback root-level directories (for backwards compatibility)
 CAP3D_DIR = DATASET_ROOT / "cap3d"
-GRAPHS_DIR = DATASET_ROOT / "graphs"
 POINT_CLOUDS_DIR = DATASET_ROOT / "point_clouds"
 DENSITY_MAPS_DIR = DATASET_ROOT / "density_maps"
+BINARY_MASKS_DIR = DATASET_ROOT / "binary-masks"
 LABELS_RWCAP_DIR = DATASET_ROOT / "labels_rwcap"
 LABELS_RAPHAEL_DIR = DATASET_ROOT / "labels_raphael"
 MANIFESTS_DIR = DATASET_ROOT / "manifests"
@@ -132,7 +136,7 @@ def find_tech_stack_for_process_node(process_node: str) -> Optional[Path]:
     if not process_node:
         raise ValueError("Process node cannot be empty or None")
 
-    tech_stack_file = Path("designs/tech") / f"{process_node}.yaml"
+    tech_stack_file = TECH_ROOT / f"{process_node}.yaml"
 
     if tech_stack_file.exists():
         return tech_stack_file
@@ -155,16 +159,16 @@ def find_layermap_for_process_node(process_node: str) -> Optional[Path]:
     if not process_node:
         raise ValueError("Process node cannot be empty or None")
 
-    layermap_file = Path("designs/tech") / f"{process_node}.layermap"
+    layermap_file = TECH_ROOT / f"{process_node}.layermap"
 
     if layermap_file.exists():
         return layermap_file
 
     # Try alternative locations
     alternative_locations = [
-        Path(f"tech/{process_node}.layermap"),
-        Path(f"tech/layermaps/{process_node}.layermap"),
-        Path(f"tech/{process_node}/{process_node}.layermap"),
+        TECH_ROOT / f"{process_node}.layermap",
+        REPO_ROOT / "tech" / "layermaps" / f"{process_node}.layermap",
+        REPO_ROOT / "tech" / process_node / f"{process_node}.layermap",
     ]
 
     for location in alternative_locations:

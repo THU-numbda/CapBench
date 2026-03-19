@@ -31,7 +31,7 @@ def create_window_level_splits(
         Tuple of (train_dataset, val_dataset, test_dataset)
     """
     # Get all window IDs
-    all_window_ids = dataset.get_window_ids()
+    all_window_ids = sorted(dataset.get_window_ids())
     print(f"Total windows available: {len(all_window_ids)}")
 
     # Validate ratios sum to approximately 1
@@ -40,9 +40,9 @@ def create_window_level_splits(
         raise ValueError(f"Split ratios must sum to 1.0, got {total_ratio}")
 
     # Deterministic window shuffling
-    random.seed(random_seed)
+    rng = random.Random(random_seed)
     shuffled_windows = all_window_ids.copy()
-    random.shuffle(shuffled_windows)
+    rng.shuffle(shuffled_windows)
 
     # Calculate split points
     n_total = len(shuffled_windows)

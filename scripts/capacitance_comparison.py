@@ -1,418 +1,271 @@
 #!/usr/bin/env python3
 """
-Comprehensive Capacitance Comparison Tool
-
-Compares capacitance extraction tools (RWCap vs Raphael vs OpenRCX) for both self and coupling
-capacitance across multiple technologies and dataset sizes.
+Comprehensive capacitance comparison tool for two SPEF directories.
 
 Usage:
-    python capacitance_comparison.py [--type self|coupling|all] [--tech all|nangate45|asap7|sky130hd] [--tools all|rwcap_raphael|rwcap_openrcx|raphael_openrcx]
+    python scripts/capacitance_comparison.py <dir_a> <dir_b> [--type self|coupling|all]
+
+`self` mode compares `*D_NET` total capacitances, not derived 3-field ground CAP entries.
 """
 
-import re
-import numpy as np
+from __future__ import annotations
+
 import argparse
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Union
-from collections import defaultdict
-import statistics
+from typing import Dict, List, Optional, Tuple
 
-# SPEF parsing patterns
-NAME_MAP_RE = re.compile(r'^\*(\d+)\s+(\S+)')
-SELF_CAP_RE = re.compile(r'^\*(\d+)\s+(\S+)\s+([\d.e-]+)$')  # Single net pattern
-COUPLING_CAP_RE = re.compile(r'^\*(\d+)\s+(\S+)\s+(\S+)\s+([\d.e-]+)$')  # Two net pattern
+import numpy as np
 
-def parse_spef_file(spef_path: Path) -> Tuple[Dict[str, float], Dict[str, Dict[str, float]]]:
-    """
-    Parse a SPEF file and extract both self and coupling capacitance values.
+from spef_tools.python_parser import load_coupling_pairs, load_dnet_totals
 
-    Returns:
-        Tuple of (self_capacitances, coupling_capacitances)
-        - self_capacitances: Dict mapping net names to self-capacitance values (in Farads)
-        - coupling_capacitances: Dict mapping (net1, net2) tuples to coupling capacitance values
-    """
-    name_map = {}  # Maps numbers to net names
-    self_capacitances = {}
-    coupling_capacitances = {}
 
-    # Ensure we have an absolute path
-    spef_path = Path(spef_path).absolute()
+DIR_A_NAME = "Dir A"
+DIR_B_NAME = "Dir B"
 
+
+def load_spef_capacitances(spef_path: Path) -> Tuple[Dict[str, float], Dict[Tuple[str, str], float]]:
+    """Load per-net total capacitances and unordered coupling pairs in Farads."""
+    spef_path = Path(spef_path).resolve()
     if not spef_path.exists():
         print(f"Warning: SPEF file not found: {spef_path}")
         return {}, {}
 
     try:
-        with open(spef_path, 'r') as f:
-            in_name_map = False
-            in_cap_section = False
+        total_capacitances = load_dnet_totals(spef_path)
+        coupling_capacitances = load_coupling_pairs(spef_path)
+    except Exception as exc:
+        print(f"Warning: Error parsing {spef_path}: {exc}")
+        return {}, {}
 
-            for line in f:
-                line = line.strip()
+    return total_capacitances, coupling_capacitances
 
-                # Skip empty lines
-                if not line:
-                    continue
 
-                # Track sections
-                if line == '*NAME_MAP':
-                    in_name_map = True
-                    continue
-                elif line == '*CAP':
-                    in_cap_section = True
-                    in_name_map = False
-                    continue
-                elif line.startswith('*') and not line.startswith('*NAME_MAP'):
-                    in_cap_section = False
-                    in_name_map = False
-                    continue
+def _resolve_spef_dir(path: Path | str, *, label: str) -> Path:
+    directory = Path(path).resolve()
+    if not directory.exists():
+        raise FileNotFoundError(f"{label} does not exist: {directory}")
+    if not directory.is_dir():
+        raise NotADirectoryError(f"{label} is not a directory: {directory}")
+    return directory
 
-                # Parse name map entries
-                if in_name_map and not line.startswith('*'):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        number = parts[0]
-                        net_name = parts[1]
-                        name_map[number] = net_name
 
-                # Parse capacitance entries (both self and coupling in *CAP section)
-                elif in_cap_section and not line.startswith('*'):
-                    parts = line.split()
-                    if len(parts) == 3:  # Self capacitance: id net_name value
-                        try:
-                            # The first part might be a number or *
-                            net_id = parts[0] if not parts[0].startswith('*') else parts[0][1:]
-                            net_name = parts[1]
-                            # If net_name is a number, look it up in name_map
-                            if net_name.isdigit():
-                                net_name = name_map.get(net_name, net_name)
+def discover_spef_file_sets(dir_a: Path | str, dir_b: Path | str) -> tuple[list[str], list[str], list[str]]:
+    """Return common stems and the stems unique to each directory."""
+    resolved_a = _resolve_spef_dir(dir_a, label=DIR_A_NAME)
+    resolved_b = _resolve_spef_dir(dir_b, label=DIR_B_NAME)
 
-                            capacitance = float(parts[2])
-                            # Convert from PF to F
-                            capacitance_f = capacitance * 1e-12
-                            self_capacitances[net_name] = capacitance_f
-                        except (ValueError, IndexError):
-                            continue
+    files_a = {path.stem for path in resolved_a.glob("*.spef")}
+    files_b = {path.stem for path in resolved_b.glob("*.spef")}
+    common_files = sorted(files_a & files_b)
+    only_a = sorted(files_a - files_b)
+    only_b = sorted(files_b - files_a)
+    return common_files, only_a, only_b
 
-                    elif len(parts) == 4:  # Coupling capacitance: id net1 net2 value
-                        try:
-                            # The first part might be a number or *
-                            id_part = parts[0] if not parts[0].startswith('*') else parts[0][1:]
-                            net1 = parts[1]
-                            net2 = parts[2]
 
-                            # If net names are numbers, look them up in name_map
-                            if net1.isdigit():
-                                net1 = name_map.get(net1, net1)
-                            if net2.isdigit():
-                                net2 = name_map.get(net2, net2)
-
-                            capacitance = float(parts[3])
-                            # Convert from PF to F
-                            capacitance_f = capacitance * 1e-12
-
-                            # Create ordered tuple for consistent keying
-                            pair_key = tuple(sorted([net1, net2]))
-                            coupling_capacitances[pair_key] = capacitance_f
-                        except (ValueError, IndexError):
-                            continue
-
-    except Exception as e:
-        print(f"Warning: Error parsing {spef_path}: {e}")
-
-    return self_capacitances, coupling_capacitances
-
-def find_common_spef_files(tool1_dir: Path, tool2_dir: Path) -> List[str]:
-    """Find common SPEF files between two tool directories."""
-    tool1_files = {f.stem for f in tool1_dir.glob("*.spef")}
-    tool2_files = {f.stem for f in tool2_dir.glob("*.spef")}
-
-    common_files = sorted(tool1_files.intersection(tool2_files))
-    return common_files
-
-def determine_pair_order(tool1_name: str, tool2_name: str,
-                         ground_truth_tool: Optional[str]) -> Tuple[str, str, bool]:
-    """
-    Ensure the chosen ground-truth tool is first in the pair.
-
-    Returns:
-        Tuple of (ordered_tool1, ordered_tool2, tool1_is_ground_truth)
-    """
-    if ground_truth_tool is None:
-        return tool1_name, tool2_name, False
-
-    if tool1_name == ground_truth_tool:
-        return tool1_name, tool2_name, True
-
-    if tool2_name == ground_truth_tool:
-        return tool2_name, tool1_name, True
-
-    return tool1_name, tool2_name, False
-
-def compare_self_capacitances(tool1_caps: Dict[str, float], tool2_caps: Dict[str, float],
-                             tool1_name: str, tool2_name: str,
-                             tool1_is_ground_truth: bool = False) -> List[Dict]:
-    """Compare self-capacitance values between two tools."""
-    common_nets = set(tool1_caps.keys()).intersection(set(tool2_caps.keys()))
+def compare_total_capacitances(
+    dir_a_caps: Dict[str, float],
+    dir_b_caps: Dict[str, float],
+    dir_a_name: str,
+    dir_b_name: str,
+    *,
+    dir_a_is_ground_truth: bool = False,
+) -> List[Dict]:
+    """Compare total D_NET capacitance values between two directories."""
+    common_nets = set(dir_a_caps.keys()) & set(dir_b_caps.keys())
     errors = []
 
     for net in common_nets:
-        tool1_val = tool1_caps[net]
-        tool2_val = tool2_caps[net]
+        dir_a_val = dir_a_caps[net]
+        dir_b_val = dir_b_caps[net]
 
-        if tool1_is_ground_truth:
-            reference_val = tool1_val
-            comparison_val = tool2_val
+        if dir_a_is_ground_truth:
+            reference_val = dir_a_val
+            comparison_val = dir_b_val
         else:
-            reference_val = tool2_val
-            comparison_val = tool1_val
+            reference_val = dir_b_val
+            comparison_val = dir_a_val
 
-        # Absolute and relative errors
-        abs_error = abs(tool1_val - tool2_val)
+        abs_error = abs(dir_a_val - dir_b_val)
         denom = max(reference_val, 1e-20)
         signed_rel_error = (comparison_val - reference_val) / denom
         rel_error = abs(signed_rel_error)
 
-        errors.append({
-            'net': net,
-            tool1_name.lower(): tool1_val,
-            tool2_name.lower(): tool2_val,
-            'abs_error': abs_error,
-            'rel_error': rel_error,
-            'signed_rel_error': signed_rel_error,
-            'ground_cap_f': reference_val,
-            'comparison_cap_f': comparison_val
-        })
+        errors.append(
+            {
+                "net": net,
+                dir_a_name.lower(): dir_a_val,
+                dir_b_name.lower(): dir_b_val,
+                "abs_error": abs_error,
+                "rel_error": rel_error,
+                "signed_rel_error": signed_rel_error,
+                "reference_cap_f": reference_val,
+                "comparison_cap_f": comparison_val,
+            }
+        )
 
     return errors
 
-def compare_coupling_capacitances(tool1_caps: Dict, tool2_caps: Dict,
-                                tool1_name: str, tool2_name: str,
-                                tool1_is_ground_truth: bool = False) -> List[Dict]:
-    """Compare coupling capacitance values between two tools."""
-    common_pairs = set(tool1_caps.keys()).intersection(set(tool2_caps.keys()))
+
+def compare_coupling_capacitances(
+    dir_a_caps: Dict[Tuple[str, str], float],
+    dir_b_caps: Dict[Tuple[str, str], float],
+    dir_a_name: str,
+    dir_b_name: str,
+    *,
+    dir_a_is_ground_truth: bool = False,
+) -> List[Dict]:
+    """Compare coupling capacitance values between two directories."""
+    common_pairs = set(dir_a_caps.keys()) & set(dir_b_caps.keys())
     errors = []
 
     for pair in common_pairs:
-        tool1_val = tool1_caps[pair]
-        tool2_val = tool2_caps[pair]
+        dir_a_val = dir_a_caps[pair]
+        dir_b_val = dir_b_caps[pair]
 
-        if tool1_is_ground_truth:
-            reference_val = tool1_val
-            comparison_val = tool2_val
+        if dir_a_is_ground_truth:
+            reference_val = dir_a_val
+            comparison_val = dir_b_val
         else:
-            reference_val = tool2_val
-            comparison_val = tool1_val
+            reference_val = dir_b_val
+            comparison_val = dir_a_val
 
-        # Absolute and relative errors
-        abs_error = abs(tool1_val - tool2_val)
+        abs_error = abs(dir_a_val - dir_b_val)
         denom = max(reference_val, 1e-20)
         signed_rel_error = (comparison_val - reference_val) / denom
         rel_error = abs(signed_rel_error)
 
         net1, net2 = pair
-        errors.append({
-            'pair': f"{net1} - {net2}",
-            tool1_name.lower(): tool1_val,
-            tool2_name.lower(): tool2_val,
-            'abs_error': abs_error,
-            'rel_error': rel_error,
-            'signed_rel_error': signed_rel_error,
-            'ground_cap_f': reference_val,
-            'comparison_cap_f': comparison_val
-        })
+        errors.append(
+            {
+                "pair": f"{net1} - {net2}",
+                dir_a_name.lower(): dir_a_val,
+                dir_b_name.lower(): dir_b_val,
+                "abs_error": abs_error,
+                "rel_error": rel_error,
+                "signed_rel_error": signed_rel_error,
+                "ground_cap_f": reference_val,
+                "comparison_cap_f": comparison_val,
+            }
+        )
 
     return errors
 
-def get_available_tools(technology: str, size: str) -> Dict[str, Path]:
-    """Get available capacitance extraction tools for a dataset."""
-    base_path = Path(f"datasets/{technology}/{size}")
-    tools = {}
 
-    # Check for each tool directory
-    tool_dirs = {
-        'RWCap': base_path / "labels_rwcap",
-        'Raphael': base_path / "labels_raphael",
-        'OpenRCX': base_path / "labels_openrcx"
-    }
+def analyze_capacitance_comparison(
+    dir_a: Path | str,
+    dir_b: Path | str,
+    common_files: List[str],
+    *,
+    dir_a_name: str = DIR_A_NAME,
+    dir_b_name: str = DIR_B_NAME,
+    analysis_type: str = "all",
+    dir_a_is_ground_truth: bool = False,
+    collect_errors: bool = False,
+    only_dir_a_files: int = 0,
+    only_dir_b_files: int = 0,
+) -> Dict:
+    """Perform detailed capacitance comparison analysis for two SPEF directories."""
+    resolved_a = _resolve_spef_dir(dir_a, label=dir_a_name)
+    resolved_b = _resolve_spef_dir(dir_b, label=dir_b_name)
 
-    for tool_name, tool_dir in tool_dirs.items():
-        if tool_dir.exists() and tool_dir.is_dir():
-            # Check if there are SPEF files
-            spef_files = list(tool_dir.glob("*.spef"))
-            if spef_files:
-                tools[tool_name] = tool_dir
-
-    return tools
-
-def analyze_dataset_comparison(technology: str, size: str, comparison_type: str = 'self',
-                            tools_to_compare: str = 'all',
-                            ground_truth_tool: Optional[str] = None,
-                            collect_errors: bool = False) -> List[Dict]:
-    """Analyze capacitance comparison for a specific dataset."""
-
-    # Get available tools
-    available_tools = get_available_tools(technology, size)
-
-    if len(available_tools) < 2:
-        return []
-
-    results = []
-
-    # Determine which tool pairs to compare
-    tool_pairs = []
-    tool_names = list(available_tools.keys())
-
-    if tools_to_compare == 'all':
-        # Compare all possible pairs
-        for i in range(len(tool_names)):
-            for j in range(i + 1, len(tool_names)):
-                tool_pairs.append((tool_names[i], tool_names[j]))
-    elif tools_to_compare == 'rwcap_raphael':
-        if 'RWCap' in tool_names and 'Raphael' in tool_names:
-            tool_pairs.append(('RWCap', 'Raphael'))
-    elif tools_to_compare == 'rwcap_openrcx':
-        if 'RWCap' in tool_names and 'OpenRCX' in tool_names:
-            tool_pairs.append(('RWCap', 'OpenRCX'))
-    elif tools_to_compare == 'raphael_openrcx':
-        if 'Raphael' in tool_names and 'OpenRCX' in tool_names:
-            tool_pairs.append(('Raphael', 'OpenRCX'))
-    else:
-        # Default to all pairs if invalid option
-        for i in range(len(tool_names)):
-            for j in range(i + 1, len(tool_names)):
-                tool_pairs.append((tool_names[i], tool_names[j]))
-
-    # Analyze each tool pair
-    for raw_tool1_name, raw_tool2_name in tool_pairs:
-        tool1_name, tool2_name, tool1_is_ground_truth = determine_pair_order(
-            raw_tool1_name, raw_tool2_name, ground_truth_tool
-        )
-
-        tool1_dir = available_tools[tool1_name]
-        tool2_dir = available_tools[tool2_name]
-
-        # Find common files
-        common_files = find_common_spef_files(tool1_dir, tool2_dir)
-        if not common_files:
-            continue
-
-        result = analyze_capacitance_comparison(
-            tool1_dir, tool2_dir, common_files,
-            tool1_name, tool2_name, technology, size, comparison_type,
-            tool1_is_ground_truth=tool1_is_ground_truth,
-            collect_errors=collect_errors
-        )
-
-        if result:
-            result['tool1_name'] = tool1_name
-            result['tool2_name'] = tool2_name
-            result['tool1_is_ground_truth'] = tool1_is_ground_truth
-            result['ground_truth_tool'] = tool1_name if tool1_is_ground_truth else tool2_name
-            results.append(result)
-
-    return results
-
-def analyze_capacitance_comparison(tool1_dir: Path, tool2_dir: Path, common_files: List[str],
-                                 tool1_name: str, tool2_name: str, technology: str, size: str,
-                                 analysis_type: str = 'all', *,
-                                 tool1_is_ground_truth: bool = False,
-                                 collect_errors: bool = False) -> Dict:
-    """Perform detailed capacitance comparison analysis."""
-
-    all_self_errors = []
+    all_total_errors = []
     all_coupling_errors = []
-    files_with_self_data = 0
+    files_with_total_data = 0
     files_with_coupling_data = 0
-    total_self_nets = 0
+    total_total_nets = 0
     total_coupling_pairs = 0
 
-    print(f"\n{'='*60}")
-    print(f"Analyzing {technology.upper()} {size.upper()} - {analysis_type.upper()}")
-    print(f"{'='*60}")
-    print(f"Found {len(common_files)} common SPEF files")
+    print(f"\n{'=' * 60}")
+    print(f"Analyzing {dir_a_name} vs {dir_b_name} - {analysis_type.upper()}")
+    print(f"{'=' * 60}")
+    print(f"{dir_a_name}: {resolved_a}")
+    print(f"{dir_b_name}: {resolved_b}")
+    print(f"Common SPEF files: {len(common_files)}")
+    print(f"Only in {dir_a_name}: {only_dir_a_files}")
+    print(f"Only in {dir_b_name}: {only_dir_b_files}")
 
     for file_name in common_files:
-        tool1_file = tool1_dir / f"{file_name}.spef"
-        tool2_file = tool2_dir / f"{file_name}.spef"
+        dir_a_file = resolved_a / f"{file_name}.spef"
+        dir_b_file = resolved_b / f"{file_name}.spef"
 
-        # Parse both files
-        tool1_self, tool1_coupling = parse_spef_file(tool1_file)
-        tool2_self, tool2_coupling = parse_spef_file(tool2_file)
+        dir_a_total, dir_a_coupling = load_spef_capacitances(dir_a_file)
+        dir_b_total, dir_b_coupling = load_spef_capacitances(dir_b_file)
 
-        # Analyze self capacitances
-        if (analysis_type == 'self' or analysis_type == 'all') and tool1_self and tool2_self:
-            self_errors = compare_self_capacitances(
-                tool1_self, tool2_self, tool1_name, tool2_name,
-                tool1_is_ground_truth=tool1_is_ground_truth
+        if analysis_type in {"self", "all"} and dir_a_total and dir_b_total:
+            total_errors = compare_total_capacitances(
+                dir_a_total,
+                dir_b_total,
+                dir_a_name,
+                dir_b_name,
+                dir_a_is_ground_truth=dir_a_is_ground_truth,
             )
-            if self_errors:
-                all_self_errors.extend(self_errors)
-                files_with_self_data += 1
-                total_self_nets += len(self_errors)
+            if total_errors:
+                all_total_errors.extend(total_errors)
+                files_with_total_data += 1
+                total_total_nets += len(total_errors)
 
-        # Analyze coupling capacitances
-        if (analysis_type == 'coupling' or analysis_type == 'all') and tool1_coupling and tool2_coupling:
+        if analysis_type in {"coupling", "all"} and dir_a_coupling and dir_b_coupling:
             coupling_errors = compare_coupling_capacitances(
-                tool1_coupling, tool2_coupling, tool1_name, tool2_name,
-                tool1_is_ground_truth=tool1_is_ground_truth
+                dir_a_coupling,
+                dir_b_coupling,
+                dir_a_name,
+                dir_b_name,
+                dir_a_is_ground_truth=dir_a_is_ground_truth,
             )
             if coupling_errors:
                 all_coupling_errors.extend(coupling_errors)
                 files_with_coupling_data += 1
                 total_coupling_pairs += len(coupling_errors)
 
-    # Compile results
     result = {
-        'technology': technology,
-        'size': size,
-        'files_analyzed': len(common_files),
-        'files_with_self_data': files_with_self_data,
-        'files_with_coupling_data': files_with_coupling_data,
-        'total_self_nets': total_self_nets,
-        'total_coupling_pairs': total_coupling_pairs,
-        'tool1_is_ground_truth': tool1_is_ground_truth,
-        'ground_truth_tool': tool1_name if tool1_is_ground_truth else tool2_name
+        "comparison_label": f"{dir_a_name} vs {dir_b_name}",
+        "dir_a_name": dir_a_name,
+        "dir_b_name": dir_b_name,
+        "dir_a_path": str(resolved_a),
+        "dir_b_path": str(resolved_b),
+        "files_analyzed": len(common_files),
+        "only_dir_a_files": int(only_dir_a_files),
+        "only_dir_b_files": int(only_dir_b_files),
+        "files_with_total_data": files_with_total_data,
+        "files_with_coupling_data": files_with_coupling_data,
+        "total_total_nets": total_total_nets,
+        "total_coupling_pairs": total_coupling_pairs,
+        "dir_a_is_ground_truth": dir_a_is_ground_truth,
+        "ground_truth_dir": dir_a_name if dir_a_is_ground_truth else dir_b_name,
     }
 
-    # Self-capacitance statistics
-    if all_self_errors:
-        self_rel_errors = [e['rel_error'] for e in all_self_errors]
-        self_abs_errors = [e['abs_error'] for e in all_self_errors]
-
-        result['self_cap'] = {
-            'mean_rel_error': np.mean(self_rel_errors),
-            'median_rel_error': np.median(self_rel_errors),
-            'std_rel_error': np.std(self_rel_errors),
-            'mean_abs_error': np.mean(self_abs_errors),
-            'max_rel_error': np.max(self_rel_errors),
-            'min_rel_error': np.min(self_rel_errors),
-            'worst_errors': sorted(all_self_errors, key=lambda x: x['rel_error'], reverse=True)[:5]
+    if all_total_errors:
+        total_rel_errors = [error["rel_error"] for error in all_total_errors]
+        total_abs_errors = [error["abs_error"] for error in all_total_errors]
+        result["total_cap"] = {
+            "mean_rel_error": np.mean(total_rel_errors),
+            "median_rel_error": np.median(total_rel_errors),
+            "std_rel_error": np.std(total_rel_errors),
+            "mean_abs_error": np.mean(total_abs_errors),
+            "max_rel_error": np.max(total_rel_errors),
+            "min_rel_error": np.min(total_rel_errors),
+            "worst_errors": sorted(all_total_errors, key=lambda value: value["rel_error"], reverse=True)[:5],
         }
+        print("Total-capacitance results:")
+        print(f"  Files with data: {files_with_total_data}/{len(common_files)}")
+        print(f"  Total nets: {total_total_nets:,}")
+        print(f"  Mean relative error: {result['total_cap']['mean_rel_error']:.2%}")
+        print(f"  Median relative error: {result['total_cap']['median_rel_error']:.2%}")
+        print(f"  Standard deviation: {result['total_cap']['std_rel_error']:.2%}")
 
-        print(f"Self-capacitance results:")
-        print(f"  Files with data: {files_with_self_data}/{len(common_files)}")
-        print(f"  Total nets: {total_self_nets:,}")
-        print(f"  Mean relative error: {result['self_cap']['mean_rel_error']:.2%}")
-        print(f"  Median relative error: {result['self_cap']['median_rel_error']:.2%}")
-        print(f"  Standard deviation: {result['self_cap']['std_rel_error']:.2%}")
-
-    # Coupling-capacitance statistics
     if all_coupling_errors:
-        coupling_rel_errors = [e['rel_error'] for e in all_coupling_errors]
-        coupling_abs_errors = [e['abs_error'] for e in all_coupling_errors]
-
-        result['coupling_cap'] = {
-            'mean_rel_error': np.mean(coupling_rel_errors),
-            'median_rel_error': np.median(coupling_rel_errors),
-            'std_rel_error': np.std(coupling_rel_errors),
-            'mean_abs_error': np.mean(coupling_abs_errors),
-            'max_rel_error': np.max(coupling_rel_errors),
-            'min_rel_error': np.min(coupling_rel_errors),
-            'worst_errors': sorted(all_coupling_errors, key=lambda x: x['rel_error'], reverse=True)[:5]
+        coupling_rel_errors = [error["rel_error"] for error in all_coupling_errors]
+        coupling_abs_errors = [error["abs_error"] for error in all_coupling_errors]
+        result["coupling_cap"] = {
+            "mean_rel_error": np.mean(coupling_rel_errors),
+            "median_rel_error": np.median(coupling_rel_errors),
+            "std_rel_error": np.std(coupling_rel_errors),
+            "mean_abs_error": np.mean(coupling_abs_errors),
+            "max_rel_error": np.max(coupling_rel_errors),
+            "min_rel_error": np.min(coupling_rel_errors),
+            "worst_errors": sorted(all_coupling_errors, key=lambda value: value["rel_error"], reverse=True)[:5],
         }
-
-        print(f"Coupling-capacitance results:")
+        print("Coupling-capacitance results:")
         print(f"  Files with data: {files_with_coupling_data}/{len(common_files)}")
         print(f"  Total pairs: {total_coupling_pairs:,}")
         print(f"  Mean relative error: {result['coupling_cap']['mean_rel_error']:.2%}")
@@ -420,144 +273,121 @@ def analyze_capacitance_comparison(tool1_dir: Path, tool2_dir: Path, common_file
         print(f"  Standard deviation: {result['coupling_cap']['std_rel_error']:.2%}")
 
     if collect_errors:
-        if all_self_errors:
-            result['self_errors'] = all_self_errors
+        if all_total_errors:
+            result["total_errors"] = all_total_errors
         if all_coupling_errors:
-            result['coupling_errors'] = all_coupling_errors
+            result["coupling_errors"] = all_coupling_errors
 
     return result
 
+
 def format_comparison_table(results: List[Dict], analysis_type: str) -> str:
     """Format comparison results into a readable table."""
-
-    if analysis_type == 'self':
-        headers = ["Technology", "Size", "Tools", "Files", "Nets", "Mean Rel Error", "Median Rel Error", "Std Rel Error"]
+    if analysis_type == "self":
+        headers = ["Comparison", "Common", "Only A", "Only B", "Nets", "Mean Rel Error", "Median Rel Error", "Std Rel Error"]
         rows = [headers]
-
         for result in results:
-            if 'self_cap' in result:
-                stats = result['self_cap']
-                tool_pair = f"{result['tool1_name']} vs {result['tool2_name']}"
-                rows.append([
-                    result['technology'].upper(),
-                    result['size'].upper(),
-                    tool_pair,
-                    str(result['files_with_self_data']),
-                    f"{result['total_self_nets']:,}",
+            if "total_cap" not in result:
+                continue
+            stats = result["total_cap"]
+            rows.append(
+                [
+                    result["comparison_label"],
+                    str(result["files_with_total_data"]),
+                    str(result["only_dir_a_files"]),
+                    str(result["only_dir_b_files"]),
+                    f"{result['total_total_nets']:,}",
                     f"{stats['mean_rel_error']:.2%}",
                     f"{stats['median_rel_error']:.2%}",
-                    f"{stats['std_rel_error']:.2%}"
-                ])
-
-    elif analysis_type == 'coupling':
-        headers = ["Technology", "Size", "Tools", "Files", "Pairs", "Mean Rel Error", "Median Rel Error", "Std Rel Error"]
+                    f"{stats['std_rel_error']:.2%}",
+                ]
+            )
+    elif analysis_type == "coupling":
+        headers = ["Comparison", "Common", "Only A", "Only B", "Pairs", "Mean Rel Error", "Median Rel Error", "Std Rel Error"]
         rows = [headers]
-
         for result in results:
-            if 'coupling_cap' in result:
-                stats = result['coupling_cap']
-                tool_pair = f"{result['tool1_name']} vs {result['tool2_name']}"
-                rows.append([
-                    result['technology'].upper(),
-                    result['size'].upper(),
-                    tool_pair,
-                    str(result['files_with_coupling_data']),
+            if "coupling_cap" not in result:
+                continue
+            stats = result["coupling_cap"]
+            rows.append(
+                [
+                    result["comparison_label"],
+                    str(result["files_with_coupling_data"]),
+                    str(result["only_dir_a_files"]),
+                    str(result["only_dir_b_files"]),
                     f"{result['total_coupling_pairs']:,}",
                     f"{stats['mean_rel_error']:.2%}",
                     f"{stats['median_rel_error']:.2%}",
-                    f"{stats['std_rel_error']:.2%}"
-                ])
-
-    else:  # combined
-        headers = ["Technology", "Size", "Tools", "Files", "Nets", "Pairs", "Self Err", "Coup Err", "Self Std", "Coup Std"]
+                    f"{stats['std_rel_error']:.2%}",
+                ]
+            )
+    else:
+        headers = ["Comparison", "Common", "Only A", "Only B", "Nets", "Pairs", "Total Err", "Coup Err", "Total Std", "Coup Std"]
         rows = [headers]
-
         for result in results:
-            tech = result['technology'].upper()
-            size = result['size'].upper()
-            files = str(result['files_analyzed'])
-            tool_pair = f"{result['tool1_name']} vs {result['tool2_name']}"
+            total_stats = result.get("total_cap")
+            coupling_stats = result.get("coupling_cap")
+            rows.append(
+                [
+                    result["comparison_label"],
+                    str(result["files_analyzed"]),
+                    str(result["only_dir_a_files"]),
+                    str(result["only_dir_b_files"]),
+                    f"{result['total_total_nets']:,}" if total_stats else "N/A",
+                    f"{result['total_coupling_pairs']:,}" if coupling_stats else "N/A",
+                    f"{total_stats['mean_rel_error']:.2%}" if total_stats else "N/A",
+                    f"{coupling_stats['mean_rel_error']:.2%}" if coupling_stats else "N/A",
+                    f"{total_stats['std_rel_error']:.2%}" if total_stats else "N/A",
+                    f"{coupling_stats['std_rel_error']:.2%}" if coupling_stats else "N/A",
+                ]
+            )
 
-            if 'self_cap' in result and 'coupling_cap' in result:
-                self_stats = result['self_cap']
-                coup_stats = result['coupling_cap']
-                rows.append([
-                    tech, size, tool_pair, files,
-                    f"{result['total_self_nets']:,}",
-                    f"{result['total_coupling_pairs']:,}",
-                    f"{self_stats['mean_rel_error']:.2%}",
-                    f"{coup_stats['mean_rel_error']:.2%}",
-                    f"{self_stats['std_rel_error']:.2%}",
-                    f"{coup_stats['std_rel_error']:.2%}"
-                ])
-            elif 'self_cap' in result:
-                self_stats = result['self_cap']
-                rows.append([
-                    tech, size, tool_pair, files,
-                    f"{result['total_self_nets']:,}",
-                    "N/A",
-                    f"{self_stats['mean_rel_error']:.2%}",
-                    "N/A",
-                    f"{self_stats['std_rel_error']:.2%}",
-                    "N/A"
-                ])
-            elif 'coupling_cap' in result:
-                coup_stats = result['coupling_cap']
-                rows.append([
-                    tech, size, tool_pair, files,
-                    "N/A",
-                    f"{result['total_coupling_pairs']:,}",
-                    "N/A",
-                    f"{coup_stats['mean_rel_error']:.2%}",
-                    "N/A",
-                    f"{coup_stats['std_rel_error']:.2%}"
-                ])
+    col_widths = [max(len(str(row[index])) for row in rows) for index in range(len(headers))]
 
-    # Format table
-    col_widths = [max(len(str(row[i])) for row in rows) for i in range(len(headers))]
     def fmt_row(row):
-        return " | ".join(str(row[i]).ljust(col_widths[i]) for i in range(len(row)))
+        return " | ".join(str(row[index]).ljust(col_widths[index]) for index in range(len(row)))
 
-    separator = "-+-".join("-" * w for w in col_widths)
-    table_lines = [fmt_row(rows[0]), separator]
-    table_lines.extend(fmt_row(row) for row in rows[1:])
+    separator = "-+-".join("-" * width for width in col_widths)
+    return "\n".join([fmt_row(rows[0]), separator, *(fmt_row(row) for row in rows[1:])])
 
-    return "\n".join(table_lines)
 
 def print_detailed_analysis(results: List[Dict], analysis_type: str):
-    """Print detailed analysis for each dataset."""
+    """Print detailed analysis for each comparison result."""
     for result in results:
-        tech = result['technology'].upper()
-        size = result['size'].upper()
-        tool1_name = result['tool1_name']
-        tool2_name = result['tool2_name']
+        dir_a_name = result["dir_a_name"]
+        dir_b_name = result["dir_b_name"]
 
-        print(f"\n{'='*60}")
-        print(f"{tech} {size} - {tool1_name} vs {tool2_name} Detailed Analysis")
-        print(f"{'='*60}")
+        print(f"\n{'=' * 60}")
+        print(f"{result['comparison_label']} Detailed Analysis")
+        print(f"{'=' * 60}")
+        print(f"{dir_a_name}: {result['dir_a_path']}")
+        print(f"{dir_b_name}: {result['dir_b_path']}")
+        print(f"Only in {dir_a_name}: {result['only_dir_a_files']}")
+        print(f"Only in {dir_b_name}: {result['only_dir_b_files']}")
 
-        if analysis_type in ['self', 'all'] and 'self_cap' in result:
-            stats = result['self_cap']
-            print(f"Self-Capacitance:")
-            print(f"  Files analyzed: {result['files_with_self_data']}")
-            print(f"  Total nets: {result['total_self_nets']:,}")
+        if analysis_type in {"self", "all"} and "total_cap" in result:
+            stats = result["total_cap"]
+            print("Total-Capacitance:")
+            print(f"  Files analyzed: {result['files_with_total_data']}")
+            print(f"  Total nets: {result['total_total_nets']:,}")
             print(f"  Mean absolute error: {stats['mean_abs_error']:.2e} F")
             print(f"  Mean relative error: {stats['mean_rel_error']:.2%}")
             print(f"  Median relative error: {stats['median_rel_error']:.2%}")
             print(f"  Standard deviation: {stats['std_rel_error']:.2%}")
             print(f"  Min relative error: {stats['min_rel_error']:.2%}")
             print(f"  Max relative error: {stats['max_rel_error']:.2%}")
+            print("  Worst 5 relative errors:")
+            for index, error in enumerate(stats["worst_errors"][:5], 1):
+                dir_a_val = error[dir_a_name.lower()]
+                dir_b_val = error[dir_b_name.lower()]
+                print(
+                    f"    {index}. Net {error['net']}: {error['rel_error']:.2%} "
+                    f"({dir_a_name}: {dir_a_val:.2e}F, {dir_b_name}: {dir_b_val:.2e}F)"
+                )
 
-            print(f"  Worst 5 relative errors:")
-            for i, error in enumerate(stats['worst_errors'][:5], 1):
-                tool1_val = error[tool1_name.lower()]
-                tool2_val = error[tool2_name.lower()]
-                print(f"    {i}. Net {error['net']}: {error['rel_error']:.2%} "
-                      f"({tool1_name}: {tool1_val:.2e}F, {tool2_name}: {tool2_val:.2e}F)")
-
-        if analysis_type in ['coupling', 'all'] and 'coupling_cap' in result:
-            stats = result['coupling_cap']
-            print(f"Coupling-Capacitance:")
+        if analysis_type in {"coupling", "all"} and "coupling_cap" in result:
+            stats = result["coupling_cap"]
+            print("Coupling-Capacitance:")
             print(f"  Files analyzed: {result['files_with_coupling_data']}")
             print(f"  Total pairs: {result['total_coupling_pairs']:,}")
             print(f"  Mean absolute error: {stats['mean_abs_error']:.2e} F")
@@ -566,26 +396,27 @@ def print_detailed_analysis(results: List[Dict], analysis_type: str):
             print(f"  Standard deviation: {stats['std_rel_error']:.2%}")
             print(f"  Min relative error: {stats['min_rel_error']:.2%}")
             print(f"  Max relative error: {stats['max_rel_error']:.2%}")
+            print("  Worst 5 relative errors:")
+            for index, error in enumerate(stats["worst_errors"][:5], 1):
+                dir_a_val = error[dir_a_name.lower()]
+                dir_b_val = error[dir_b_name.lower()]
+                print(
+                    f"    {index}. {error['pair']}: {error['rel_error']:.2%} "
+                    f"({dir_a_name}: {dir_a_val:.2e}F, {dir_b_name}: {dir_b_val:.2e}F)"
+                )
 
-            print(f"  Worst 5 relative errors:")
-            for i, error in enumerate(stats['worst_errors'][:5], 1):
-                tool1_val = error[tool1_name.lower()]
-                tool2_val = error[tool2_name.lower()]
-                print(f"    {i}. {error['pair']}: {error['rel_error']:.2%} "
-                      f"({tool1_name}: {tool1_val:.2e}F, {tool2_name}: {tool2_val:.2e}F)")
 
-def generate_self_cap_scatter_plot(results: List[Dict], output_path: Path,
-                                   max_points: int = 10_000,
-                                   ground_truth_tool: Optional[str] = None,
-                                   font_scale: float = 2.0) -> None:
+def generate_self_cap_scatter_plot(
+    results: List[Dict],
+    output_path: Path,
+    *,
+    max_points: int = 10_000,
+    font_scale: float = 2.0,
+) -> None:
     """Generate scatter plots comparing total capacitance vs. extraction error."""
-    plot_ready = [
-        r for r in results
-        if r.get('self_errors') and (ground_truth_tool is None or r.get('ground_truth_tool') == ground_truth_tool)
-    ]
-
+    plot_ready = [result for result in results if result.get("total_errors")]
     if not plot_ready:
-        print("No self-capacitance error data available for scatter plot generation.")
+        print("No total-capacitance error data available for scatter plot generation.")
         return
 
     try:
@@ -595,175 +426,159 @@ def generate_self_cap_scatter_plot(results: List[Dict], output_path: Path,
         return
 
     num_plots = len(plot_ready)
-    plt.rcParams.update({
-        'font.family': 'Times New Roman',
-        'font.size': plt.rcParams.get('font.size', 10) * font_scale
-    })
+    plt.rcParams.update(
+        {
+            "font.family": "Times New Roman",
+            "font.size": plt.rcParams.get("font.size", 10) * font_scale,
+        }
+    )
     fig, axes = plt.subplots(1, num_plots, figsize=(6 * num_plots, 5), squeeze=False, sharey=True)
     axes = axes.flatten()
 
-    for ax, result in zip(axes, plot_ready):
-        errors = result['self_errors']
-        if not errors:
-            ax.set_visible(False)
-            continue
-
-        ground_caps = np.array([err['ground_cap_f'] for err in errors], dtype=float)
-        signed_rel_errors = np.array([err['signed_rel_error'] for err in errors], dtype=float) * 100.0
+    for axis, result in zip(axes, plot_ready):
+        errors = result["total_errors"]
+        ground_caps = np.array([error["reference_cap_f"] for error in errors], dtype=float)
+        signed_rel_errors = np.array([error["signed_rel_error"] for error in errors], dtype=float) * 100.0
 
         valid_mask = ground_caps > 0
         ground_caps = ground_caps[valid_mask]
         signed_rel_errors = signed_rel_errors[valid_mask]
-
         if ground_caps.size == 0:
-            ax.set_visible(False)
+            axis.set_visible(False)
             continue
 
-        caps_ff = ground_caps * 1e15  # Convert to femtofarads for readability
-
-        if caps_ff.size == 0:
-            ax.set_visible(False)
-            continue
-
+        caps_ff = ground_caps * 1e15
         if caps_ff.size > max_points:
             caps_ff = caps_ff[:max_points]
             signed_rel_errors = signed_rel_errors[:max_points]
 
-        comparison_tool = result['tool2_name'] if result.get('tool1_is_ground_truth') else result['tool1_name']
-        color_map = {
-            'RWCap': '#2c7fb8',     # darker blue tone
-            'OpenRCX': '#c75062'    # darker magenta/red tone
-        }
-        point_color = color_map.get(comparison_tool, '#d62728')
+        point_color = "#c75062" if result.get("dir_a_is_ground_truth") else "#2c7fb8"
+        axis.scatter(
+            signed_rel_errors,
+            caps_ff,
+            s=6 * (1.33 ** 2),
+            alpha=0.8,
+            color=point_color,
+            edgecolors="none",
+        )
+        axis.axvline(0.0, color="black", linewidth=0.8, alpha=0.5)
+        axis.set_yscale("log")
 
-        base_size = 6
-        size_scale = 1.33 ** 2  # radius increase by 33%
-        ax.scatter(signed_rel_errors, caps_ff, s=base_size * size_scale, alpha=0.8,
-                   color=point_color, edgecolors='none')
-        ax.axvline(0.0, color='black', linewidth=0.8, alpha=0.5)
-        ax.set_yscale('log')
+        x_abs_max = float(np.max(np.abs(signed_rel_errors))) if signed_rel_errors.size else 0.0
+        x_limit = max(5.0, np.ceil(x_abs_max / 5.0) * 5.0)
+        axis.set_xlim(-x_limit, x_limit)
 
-        tool_lower = comparison_tool.lower()
-        if tool_lower == 'openrcx':
-            ax.set_xlim(-200, 200)
-            ax.set_xticks([-200, -100, 0, 100, 200])
-        elif tool_lower == 'rwcap':
-            ax.set_xlim(-10, 10)
-            ax.set_xticks([-10, -5, 0, 5, 10])
-        else:
-            x_abs_max = np.max(np.abs(signed_rel_errors))
-            x_limit = max(5.0, np.ceil(x_abs_max / 5.0) * 5.0)
-            ax.set_xlim(-x_limit, x_limit)
-
-        y_min = caps_ff.min()
-        y_max = caps_ff.max()
+        y_min = float(caps_ff.min())
+        y_max = float(caps_ff.max())
         lower = max(1e-3, y_min)
         upper = max(1.0, 10 ** np.ceil(np.log10(max(y_max, lower * 10))))
-        ax.set_ylim(lower, upper)
+        axis.set_ylim(lower, upper)
 
-        ax.set_xlabel("Error (%)")
-
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
+        axis.set_title(result["comparison_label"])
+        axis.set_xlabel("Error (%)")
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
 
     axes[0].set_ylabel("Total Capacitance (fF)")
 
     output_path = Path(output_path)
-    if output_path.suffix.lower() != '.pdf':
-        output_path = output_path.with_suffix('.pdf')
+    if output_path.suffix.lower() != ".pdf":
+        output_path = output_path.with_suffix(".pdf")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(output_path, format='pdf')
+    fig.savefig(output_path, format="pdf")
     plt.close(fig)
     print(f"Saved scatter plot to {output_path}")
 
-def main():
-    """Main comparison analysis."""
-    parser = argparse.ArgumentParser(description='Comprehensive Capacitance Comparison Tool')
-    parser.add_argument('--type', choices=['self', 'coupling', 'all'], default='all',
-                       help='Type of capacitance analysis to perform')
-    parser.add_argument('--tech', choices=['all', 'nangate45', 'asap7', 'sky130hd'], default='all',
-                       help='Technology nodes to analyze')
-    parser.add_argument('--size', choices=['all', 'small', 'medium', 'large'], default='all',
-                       help='Dataset sizes to analyze')
-    parser.add_argument('--tools', choices=['all', 'rwcap_raphael', 'rwcap_openrcx', 'raphael_openrcx'],
-                       default='all', help='Tool pairs to compare')
-    parser.add_argument('--no-details', action='store_true',
-                       help='Skip detailed analysis output')
-    parser.add_argument('--ground-truth-tool', choices=['RWCap', 'Raphael', 'OpenRCX'],
-                        default=None, help='Tool to treat as ground truth when comparing pairs')
-    parser.add_argument('--scatter-plot', type=str, default=None,
-                        help='Output path for scatter plot of error vs total capacitance')
-    parser.add_argument('--scatter-max-points', type=int, default=1_000,
-                        help='Maximum number of points per subplot in the scatter plot')
-    parser.add_argument('--scatter-font-scale', type=float, default=2.0,
-                        help='Font scale multiplier for the scatter plot (default doubles the base size)')
 
-    args = parser.parse_args()
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Compare capacitance values across two SPEF directories.")
+    parser.add_argument("dir_a", type=Path, help="First directory containing .spef files.")
+    parser.add_argument("dir_b", type=Path, help="Second directory containing .spef files.")
+    parser.add_argument(
+        "--type",
+        choices=["self", "coupling", "all"],
+        default="all",
+        help="Type of capacitance analysis to perform. `self` compares D_NET totals.",
+    )
+    parser.add_argument("--no-details", action="store_true", help="Skip detailed analysis output.")
+    parser.add_argument(
+        "--ground-truth",
+        choices=["a", "b"],
+        default=None,
+        help="Which directory to treat as ground truth when computing signed relative errors.",
+    )
+    parser.add_argument("--scatter-plot", type=str, default=None, help="Output path for total-capacitance scatter plot.")
+    parser.add_argument(
+        "--scatter-max-points",
+        type=int,
+        default=1_000,
+        help="Maximum number of points per subplot in the scatter plot.",
+    )
+    parser.add_argument(
+        "--scatter-font-scale",
+        type=float,
+        default=2.0,
+        help="Font scale multiplier for the scatter plot.",
+    )
+    return parser
 
-    print("Comprehensive Capacitance Comparison: RWCap vs Raphael vs OpenRCX")
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    dir_a = _resolve_spef_dir(args.dir_a, label=DIR_A_NAME)
+    dir_b = _resolve_spef_dir(args.dir_b, label=DIR_B_NAME)
+
+    print(f"Comprehensive Capacitance Comparison: {DIR_A_NAME} vs {DIR_B_NAME}")
     print("=" * 80)
 
-    # Define datasets to analyze
-    all_datasets = [
-        ('nangate45', 'small'),
-        ('asap7', 'small'),
-        ('sky130hd', 'small'),
-        ('sky130hd', 'medium'),
-        ('sky130hd', 'large'),
-    ]
+    common_files, only_a, only_b = discover_spef_file_sets(dir_a, dir_b)
+    if not common_files:
+        print("No comparison results found. The two directories do not share any .spef filename stems.")
+        return 0
 
-    # Filter datasets based on arguments
-    if args.tech != 'all':
-        all_datasets = [(tech, size) for tech, size in all_datasets if tech == args.tech]
+    result = analyze_capacitance_comparison(
+        dir_a,
+        dir_b,
+        common_files,
+        analysis_type=args.type,
+        dir_a_is_ground_truth=args.ground_truth == "a",
+        collect_errors=bool(args.scatter_plot),
+        only_dir_a_files=len(only_a),
+        only_dir_b_files=len(only_b),
+    )
+    results = [result]
 
-    if args.size != 'all':
-        all_datasets = [(tech, size) for tech, size in all_datasets if size == args.size]
-
-    results = []
-    collect_errors = bool(args.scatter_plot)
-
-    # Analyze each dataset
-    for technology, size in all_datasets:
-        dataset_results = analyze_dataset_comparison(
-            technology, size, args.type, args.tools,
-            ground_truth_tool=args.ground_truth_tool,
-            collect_errors=collect_errors
-        )
-        results.extend(dataset_results)
-
-    # Print summary tables
-    if not results:
-        print("No comparison results found. Check that the specified tools and datasets exist.")
-        return
-
-    if args.type == 'all':
-        print(f"\n{'='*80}")
+    if args.type == "all":
+        print(f"\n{'=' * 80}")
         print("COMBINED SUMMARY TABLE")
-        print(f"{'='*80}")
-        print(format_comparison_table(results, 'combined'))
+        print(f"{'=' * 80}")
+        print(format_comparison_table(results, "combined"))
 
-        print(f"\n{'='*80}")
-        print("SELF-CAPACITANCE SUMMARY")
-        print(f"{'='*80}")
-        self_results = [r for r in results if 'self_cap' in r]
-        if self_results:
-            print(format_comparison_table(self_results, 'self'))
+        total_results = [current for current in results if "total_cap" in current]
+        if total_results:
+            print(f"\n{'=' * 80}")
+            print("TOTAL-CAPACITANCE SUMMARY")
+            print(f"{'=' * 80}")
+            print(format_comparison_table(total_results, "self"))
 
-        print(f"\n{'='*80}")
-        print("COUPLING-CAPACITANCE SUMMARY")
-        print(f"{'='*80}")
-        coupling_results = [r for r in results if 'coupling_cap' in r]
+        coupling_results = [current for current in results if "coupling_cap" in current]
         if coupling_results:
-            print(format_comparison_table(coupling_results, 'coupling'))
-
+            print(f"\n{'=' * 80}")
+            print("COUPLING-CAPACITANCE SUMMARY")
+            print(f"{'=' * 80}")
+            print(format_comparison_table(coupling_results, "coupling"))
     else:
-        print(f"\n{'='*80}")
-        print(f"{args.type.upper()}-CAPACITANCE SUMMARY")
-        print(f"{'='*80}")
+        print(f"\n{'=' * 80}")
+        if args.type == "self":
+            print("TOTAL-CAPACITANCE SUMMARY")
+        else:
+            print(f"{args.type.upper()}-CAPACITANCE SUMMARY")
+        print(f"{'=' * 80}")
         print(format_comparison_table(results, args.type))
 
-    # Print detailed analysis
     if not args.no_details:
         print_detailed_analysis(results, args.type)
 
@@ -772,9 +587,11 @@ def main():
             results,
             Path(args.scatter_plot),
             max_points=args.scatter_max_points,
-            ground_truth_tool=args.ground_truth_tool,
-            font_scale=args.scatter_font_scale
+            font_scale=args.scatter_font_scale,
         )
 
-if __name__ == '__main__':
-    main()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

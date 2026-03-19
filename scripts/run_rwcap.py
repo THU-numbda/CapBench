@@ -43,6 +43,13 @@ def parse_args() -> argparse.Namespace:
         default=Path("datasets"),
         help="Root directory containing dataset folders (default: datasets/).",
     )
+    parser.add_argument(
+        "--extract-level",
+        type=str,
+        choices=["net", "block"],
+        default="net",
+        help="Extraction level: 'net' for per-net capacitances (default), 'block' for per-block capacitances.",
+    )
     return parser.parse_args()
 
 
@@ -107,31 +114,61 @@ def find_cap3d_files(dataset_path: Path) -> List[Path]:
 
 
 def out_file_for_cap3d(cap3d_file: Path) -> Path:
+    """Return path for net-level RWCap output (.out file)."""
     return cap3d_file.parent.parent / "out_rwcap" / f"{cap3d_file.stem}.out"
 
 
-def log_file_for_cap3d(cap3d_file: Path) -> Path:
+def block_out_file_for_cap3d(cap3d_file: Path) -> Path:
+    """Return path for block-level RWCap output (_block.txt file)."""
+    return cap3d_file.parent.parent / "out_rwcap" / f"{cap3d_file.stem}_block.txt"
+
+
+def log_file_for_cap3d(cap3d_file: Path, extract_level: str = "net") -> Path:
+    """Return path for RWCap log file."""
     dataset_dir = cap3d_file.parent.parent
-    return dataset_dir / "log_rwcap" / f"{cap3d_file.stem}.log"
+    suffix = "_block" if extract_level == "block" else ""
+    return dataset_dir / "log_rwcap" / f"{cap3d_file.stem}{suffix}.log"
 
 
-def run_rwcap(rwcap_bin: str, cap3d_file: Path) -> Tuple[bool, Path]:
-    out_file = out_file_for_cap3d(cap3d_file)
-    log_file = log_file_for_cap3d(cap3d_file)
-    out_file.parent.mkdir(parents=True, exist_ok=True)
+def run_rwcap(rwcap_bin: str, cap3d_file: Path, extract_level: str = "net") -> Tuple[bool, Path]:
+    """Run RWCap on a single CAP3D file.
+    
+    Args:
+        rwcap_bin: Path to RWCap binary
+        cap3d_file: Path to input CAP3D file
+        extract_level: 'net' for per-net extraction, 'block' for per-block extraction
+    
+    Returns:
+        Tuple of (success: bool, log_file: Path)
+    """
+    log_file = log_file_for_cap3d(cap3d_file, extract_level)
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = [
-        rwcap_bin,
-        "-n",
-        "32",
-        "-p",
-        "0.005",
-        "-f",
-        str(cap3d_file),
-        "--out-file",
-        str(out_file),
-    ]
+    if extract_level == "block":
+        # Block-level extraction
+        block_out_file = block_out_file_for_cap3d(cap3d_file)
+        block_out_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        cmd = [
+            rwcap_bin,
+            "-n", "32",
+            "-p", "0.005",
+            "-f", str(cap3d_file),
+            "--extract-level", "block",
+            "--brc", str(block_out_file),
+        ]
+    else:
+        # Net-level extraction (default, original behavior)
+        out_file = out_file_for_cap3d(cap3d_file)
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        cmd = [
+            rwcap_bin,
+            "-n", "32",
+            "-p", "0.005",
+            "-f", str(cap3d_file),
+            "--out-file", str(out_file),
+        ]
 
     with log_file.open("w") as log_handle:
         result = subprocess.run(cmd, stdout=log_handle, stderr=subprocess.STDOUT)
@@ -143,7 +180,19 @@ def collect_tasks(
     datasets_root: Path,
     process_filter: Optional[set[str]],
     size_filter: Optional[set[str]],
+    extract_level: str = "net",
 ) -> Tuple[List[Path], int, int]:
+    """Collect CAP3D files that need processing.
+    
+    Args:
+        datasets_root: Root directory containing datasets
+        process_filter: Optional set of process nodes to include
+        size_filter: Optional set of dataset sizes to include
+        extract_level: 'net' or 'block' - determines which output file to check
+    
+    Returns:
+        Tuple of (tasks, total_candidates, skipped)
+    """
     total_candidates = 0
     skipped = 0
     tasks: List[Path] = []
@@ -159,7 +208,12 @@ def collect_tasks(
         cap3d_files = find_cap3d_files(dataset_dir)
         for cap3d_file in cap3d_files:
             total_candidates += 1
-            out_file = out_file_for_cap3d(cap3d_file)
+            # Check appropriate output file based on extraction level
+            if extract_level == "block":
+                out_file = block_out_file_for_cap3d(cap3d_file)
+            else:
+                out_file = out_file_for_cap3d(cap3d_file)
+            
             if out_file.exists():
                 skipped += 1
                 continue
@@ -177,29 +231,35 @@ def main() -> None:
 
     process_filter = parse_filters(args.process_nodes)
     size_filter = parse_filters(args.sizes)
+    extract_level = args.extract_level
 
     tasks, total_candidates, skipped = collect_tasks(
-        args.datasets_root, process_filter, size_filter
+        args.datasets_root, process_filter, size_filter, extract_level
     )
 
     remaining = len(tasks)
+    level_desc = "block-level" if extract_level == "block" else "net-level"
+    out_suffix = "_block.txt" if extract_level == "block" else ".out"
+    
+    print(f"Extraction level: {level_desc}")
     print(f"Discovered {total_candidates} CAP3D files after filtering.")
-    print(f"Already solved (out_rwcap exists): {skipped}")
+    print(f"Already solved ({out_suffix} exists): {skipped}")
     print(f"Remaining files to process: {remaining}")
 
     if remaining == 0:
-        print("All CAP3D files already have RWCap outputs. Nothing to do.")
+        print(f"All CAP3D files already have RWCap {level_desc} outputs. Nothing to do.")
         return
 
     start_time = time.time()
     successes = 0
     failures = 0
 
+    progress_desc = f"RWCap {level_desc}"
     with ThreadPoolExecutor(max_workers=args.jobs) as executor, tqdm(
-        total=remaining, desc="RWCap windows", unit="win"
+        total=remaining, desc=progress_desc, unit="win"
     ) as progress:
         future_to_cap3d = {
-            executor.submit(run_rwcap, rwcap_bin, cap3d_file): cap3d_file
+            executor.submit(run_rwcap, rwcap_bin, cap3d_file, extract_level): cap3d_file
             for cap3d_file in tasks
         }
 
@@ -216,7 +276,7 @@ def main() -> None:
             progress.update(1)
 
     duration = time.time() - start_time
-    print("\n=== RWCap Processing Summary ===")
+    print(f"\n=== RWCap {level_desc.title()} Processing Summary ===")
     print(f"Total CAP3D files considered: {total_candidates}")
     print(f"Total files processed: {remaining}")
     print(f"Total files skipped: {skipped}")

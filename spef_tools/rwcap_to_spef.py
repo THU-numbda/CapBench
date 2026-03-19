@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 """
-Convert every RWCap `.out` file in a directory to capacitance-only SPEF files.
+Convert RWCap output files to capacitance-only SPEF files.
+
+Supports two modes:
+- Net-level (default): Convert .out files with per-net capacitances
+- Block-level: Convert _block.txt files with per-block capacitances
 
 Usage:
-    python spef/rwcap_to_spef.py <rwcap_dir> <spef_dir>
+    # Net-level conversion (default)
+    python spef_tools/rwcap_to_spef.py <rwcap_dir> <spef_dir>
 
-Each `.out` file is parsed and written to `<spef_dir>/<window>.spef`, where
+    # Block-level conversion
+    python spef_tools/rwcap_to_spef.py <rwcap_dir> <spef_dir> --mode block
+
+Each input file is parsed and written to `<spef_dir>/<window>.spef`, where
 `<window>` is derived from the RWCap filename. All capacitive pairs found in the
-RWCap reports, including terms against `GROUND`, are emitted as explicit
-coupling entries in the SPEF.
+RWCap reports are emitted as explicit coupling entries in the SPEF.
 """
 
 from __future__ import annotations
@@ -30,9 +37,15 @@ from tqdm import tqdm
 
 
 
+# Net-level format patterns (.out files)
 TaskRe = re.compile(r"^Task\s+(?P<net>.+?):\s")
 MasterRe = re.compile(r"^Master\s+(?P<net>.+?)\s*:\s*(?P<val>[+\-]?[0-9]*\.?[0-9]+(?:[eE][+\-]?[0-9]+)?)\s*F\s*$")
 CapOnRe = re.compile(r"^Capacitance on\s+(?P<name>.+?)\s*=\s*(?P<val>[+\-]?[0-9]*\.?[0-9]+(?:[eE][+\-]?[0-9]+)?)\s*F\s*$")
+
+# Block-level format patterns (_block.txt files)
+CircuitRe = re.compile(r"^CIRCUIT\s+(?P<name>.+)$")
+BlockNumberRe = re.compile(r"^BLOCK\s+NUMBER\s+(?P<count>\d+)$")
+BlockCapRe = re.compile(r"^C\s+(?P<block1>\d+)\s+(?P<block2>\d+)\s+(?P<val>[+\-]?[0-9]*\.?[0-9]+(?:[eE][+\-]?[0-9]+)?)\s+(?P<accuracy>[0-9.]+)%?$")
 
 
 def parse_rwcap(
@@ -104,6 +117,82 @@ def parse_rwcap(
                 coupling_f[(i, j)] = c
 
     return self_cap_f, coupling_f
+
+
+def parse_rwcap_block(
+    lines: Iterable[str],
+    *,
+    threshold_f: float = 0.0,
+) -> Tuple[str, int, Dict[int, float], Dict[Tuple[int, int], float]]:
+    """Parse block-level RWCap output (_block.txt files).
+
+    Block-level format:
+        CIRCUIT case-0
+        BLOCK NUMBER 349
+        C <block1> <block2> <value> <accuracy>%
+        ...
+
+    When block1 == block2, it's self-capacitance.
+    When block1 != block2, it's coupling capacitance.
+
+    Returns:
+        circuit_name: Name of the circuit
+        block_count: Number of blocks
+        self_cap_f: block_id -> self capacitance (F)
+        coupling_f: (min(block_i, block_j), max(...)) -> coupling (F)
+    """
+    circuit_name = "design"
+    block_count = 0
+    self_cap_f: Dict[int, float] = {}
+    coupling_f: Dict[Tuple[int, int], float] = {}
+
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+
+        # Parse CIRCUIT line
+        m = CircuitRe.match(line)
+        if m:
+            circuit_name = m.group("name")
+            continue
+
+        # Parse BLOCK NUMBER line
+        m = BlockNumberRe.match(line)
+        if m:
+            block_count = int(m.group("count"))
+            continue
+
+        # Parse C <block1> <block2> <value> <accuracy> lines
+        m = BlockCapRe.match(line)
+        if m:
+            block1 = int(m.group("block1"))
+            block2 = int(m.group("block2"))
+            try:
+                val = float(m.group("val"))
+            except ValueError:
+                continue
+
+            # Apply threshold
+            if abs(val) < threshold_f:
+                continue
+
+            if block1 == block2:
+                # Self-capacitance
+                # Keep the max absolute value if duplicate
+                if block1 not in self_cap_f or abs(self_cap_f[block1]) < abs(val):
+                    self_cap_f[block1] = val
+            else:
+                # Coupling capacitance
+                c = abs(val)
+                i, j = min(block1, block2), max(block1, block2)
+                if (i, j) in coupling_f:
+                    # Average if seen twice (symmetry)
+                    coupling_f[(i, j)] = 0.5 * (coupling_f[(i, j)] + c)
+                else:
+                    coupling_f[(i, j)] = c
+
+    return circuit_name, block_count, self_cap_f, coupling_f
 
 
 def build_name_map(nets: Iterable[str]) -> List[str]:
@@ -241,6 +330,99 @@ def write_spef(
     return None
 
 
+def write_block_spef(
+    out,
+    *,
+    design: str,
+    blocks: List[int],
+    self_cap_f: Dict[int, float],
+    coupling_f: Dict[Tuple[int, int], float],
+) -> None:
+    """Write SPEF file for block-level capacitances.
+    
+    Each block is treated as a separate "net" with:
+    - Self-capacitance from diagonal entries
+    - Coupling capacitances from off-diagonal entries
+    - Zero resistances
+    """
+    # Header
+    now = _dt.datetime.now().strftime("%H:%M:%S %A %B %d, %Y")
+    print('*SPEF "ieee 1481-1999"', file=out)
+    print(f'*DESIGN "{design}"', file=out)
+    print(f'*DATE "{now}"', file=out)
+    print('*VENDOR "RWCap-to-SPEF"', file=out)
+    print('*PROGRAM "rwcap_to_spef"', file=out)
+    print('*VERSION "1.0"', file=out)
+    print('*DESIGN_FLOW "NAME_SCOPE LOCAL" "PIN_CAP NONE"', file=out)
+    print('*DIVIDER /', file=out)
+    print('*DELIMITER :', file=out)
+    print('*BUS_DELIMITER []', file=out)
+    print('*T_UNIT 1 NS', file=out)
+    print('*C_UNIT 1 PF', file=out)
+    print('*R_UNIT 1 OHM', file=out)
+    print('*L_UNIT 1 HENRY', file=out)
+    print('', file=out)
+
+    # Name map: block IDs as net names (1-based SPEF index)
+    print('*NAME_MAP', file=out)
+    # Map block ID to SPEF index (1-based)
+    spef_idx_by_block = {block: i + 1 for i, block in enumerate(blocks)}
+    for block in blocks:
+        idx = spef_idx_by_block[block]
+        # Use block ID as the "net name"
+        print(f'*{idx} block_{block}', file=out)
+    print('', file=out)
+
+    # Pre-build adjacency for couplings
+    neighbors: Dict[int, List[Tuple[int, float]]] = defaultdict(list)
+    for (i, j), c in coupling_f.items():
+        neighbors[i].append((j, c))
+        neighbors[j].append((i, c))
+
+    # Emit per-block sections
+    for block in blocks:
+        # Collect capacitance entries for this block
+        cap_entries: List[Tuple[int, Optional[int], float]] = []
+
+        # Emit couplings only when block is smaller to avoid duplicates
+        for (other, c) in neighbors.get(block, []):
+            if block < other:
+                cap_entries.append((block, other, c))
+
+        # Self-capacitance
+        block_self_cap_f = self_cap_f.get(block, 0.0)
+        cap_entries.insert(0, (block, None, block_self_cap_f))
+
+        # Convert to pF
+        cap_entries_pf = [(a, b, v * 1e12) for (a, b, v) in cap_entries]
+        # Total capacitance is the self-capacitance value
+        total_pf = block_self_cap_f * 1e12
+
+        # Section header
+        print(f'*D_NET *{spef_idx_by_block[block]} {total_pf:.12g}', file=out)
+        print('*CONN', file=out)
+        # Minimal single port
+        print(f'*P block_{block} B', file=out)
+        print('*CAP', file=out)
+
+        # Emit CAP entries
+        idx = 1
+        for (a, b, vpf) in cap_entries_pf:
+            if b is None:
+                # self-capacitance
+                print(f'{idx} block_{a} {vpf:.12g}', file=out)
+            else:
+                print(f'{idx} block_{a} block_{b} {vpf:.12g}', file=out)
+            idx += 1
+
+        print('*RES', file=out)
+        # No resistors (capacitance-only, resistances are 0)
+        print('*END', file=out)
+        print('', file=out)
+
+    return None
+
+
 def _sanitize_window_id(input_path: Path) -> str:
     """Derive a window identifier from the RWCap filename."""
     window_id = input_path.stem
@@ -250,6 +432,113 @@ def _sanitize_window_id(input_path: Path) -> str:
     if not window_id:
         window_id = input_path.name.replace(".out", "").strip() or "window"
     return window_id
+
+
+def _sanitize_block_window_id(input_path: Path) -> str:
+    """Derive a window identifier from block-level RWCap filename.
+    
+    Expects filenames like "W0_block.txt" -> "W0"
+    """
+    window_id = input_path.stem
+    # Remove _block suffix
+    if window_id.endswith("_block"):
+        window_id = window_id[: -len("_block")]
+    if not window_id:
+        window_id = input_path.name.replace("_block.txt", "").strip() or "window"
+    return window_id
+
+
+def convert_single_file_block(
+    input_path: Path,
+    output_dir: Path,
+    *,
+    threshold_f: float = DEFAULT_THRESHOLD_F,
+    coupling_threshold_ratio: float = DEFAULT_COUPLING_THRESHOLD_RATIO,
+    design_name: Optional[str] = None,
+) -> Dict[str, object]:
+    """Convert a single block-level RWCap file to SPEF.
+    
+    Args:
+        input_path: Path to _block.txt file
+        output_dir: Directory for output SPEF file
+        threshold_f: Minimum absolute capacitance threshold (F)
+        coupling_threshold_ratio: Skip couplings below this ratio of self capacitance
+        design_name: Optional design name for SPEF header
+    
+    Returns:
+        Dictionary with conversion statistics
+    """
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+
+    window_id = _sanitize_block_window_id(input_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{window_id}.spef"
+
+    with input_path.open("r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
+
+    circuit_name, block_count, self_cap_f, coupling_f = parse_rwcap_block(
+        lines,
+        threshold_f=threshold_f,
+    )
+
+    design = design_name or circuit_name or window_id or DEFAULT_DESIGN_NAME
+
+    # Get list of blocks that have any capacitance data
+    blocks_with_data: Set[int] = set(self_cap_f.keys())
+    for (i, j) in coupling_f.keys():
+        blocks_with_data.add(i)
+        blocks_with_data.add(j)
+    
+    blocks = sorted(blocks_with_data)
+    if not blocks:
+        raise ValueError(f"No blocks with capacitance data found in {input_path}")
+
+    # Apply coupling threshold filtering
+    filtered_coupling_f: Dict[Tuple[int, int], float] = {}
+    removed_count = 0
+    considered_count = 0
+
+    for (i, j), c in coupling_f.items():
+        self_cap_i = abs(self_cap_f.get(i, 0.0))
+        self_cap_j = abs(self_cap_f.get(j, 0.0))
+
+        # Skip if either block has zero self capacitance
+        if self_cap_i == 0.0 or self_cap_j == 0.0:
+            continue
+
+        considered_count += 1
+        threshold_i = self_cap_i * coupling_threshold_ratio
+        threshold_j = self_cap_j * coupling_threshold_ratio
+
+        if c >= threshold_i and c >= threshold_j:
+            filtered_coupling_f[(i, j)] = c
+        else:
+            removed_count += 1
+
+    retained_count = len(filtered_coupling_f)
+
+    # Write SPEF
+    with output_path.open("w", encoding="utf-8") as out:
+        write_block_spef(
+            out,
+            design=design,
+            blocks=blocks,
+            self_cap_f=self_cap_f,
+            coupling_f=filtered_coupling_f,
+        )
+
+    return {
+        "window_id": window_id,
+        "output_path": str(output_path),
+        "block_count": block_count,
+        "blocks_with_data": len(blocks),
+        "self_cap_count": len(self_cap_f),
+        "coupling_count_pre_threshold": len(coupling_f),
+        "removed_couplings_count": removed_count,
+        "retained_couplings_count": retained_count,
+    }
 
 
 def convert_single_file(
@@ -353,95 +642,147 @@ def convert_directory(
     input_dir: Path,
     output_dir: Path,
     *,
+    mode: str = "net",
     coupling_threshold_ratio: float = DEFAULT_COUPLING_THRESHOLD_RATIO,
 ) -> int:
+    """Convert RWCap output files to SPEF format.
+    
+    Args:
+        input_dir: Directory containing RWCap output files
+        output_dir: Directory for output SPEF files
+        mode: 'net' for .out files (net-level), 'block' for _block.txt files (block-level)
+        coupling_threshold_ratio: Skip couplings below this ratio of self capacitance
+    
+    Returns:
+        Exit code (0 for success, non-zero for errors)
+    """
     if not input_dir.is_dir():
         print(f"Input directory not found: {input_dir}", file=sys.stderr)
         return 1
 
-    rwcap_files = sorted(f for f in input_dir.glob("*.out") if f.is_file())
+    # Select file pattern based on mode
+    if mode == "block":
+        rwcap_files = sorted(f for f in input_dir.glob("*_block.txt") if f.is_file())
+        file_type = "_block.txt"
+        desc = "Converting RWCAP (block-level)"
+    else:
+        rwcap_files = sorted(f for f in input_dir.glob("*.out") if f.is_file())
+        file_type = ".out"
+        desc = "Converting RWCAP (net-level)"
+
     if not rwcap_files:
-        print(f"No .out files found in {input_dir}", file=sys.stderr)
+        print(f"No {file_type} files found in {input_dir}", file=sys.stderr)
         return 1
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
     failures = 0
-    diff_records: List[Dict[str, object]] = []
     total_removed_couplings = 0
     total_retained_couplings = 0
 
-    iterator = tqdm(rwcap_files, desc="Converting RWCAP", unit="file")
-
-    for rwcap_file in iterator:
-        try:
-            result = convert_single_file(
-                rwcap_file,
-                output_dir,
-                coupling_threshold_ratio=coupling_threshold_ratio,
-            )
-            total_coupling = result["total_coupling_pre_threshold"]
-            diff = result["coupling_minus_self_pre_threshold"]
-            ratio = (abs(diff) / total_coupling) if total_coupling else float("inf")
-            removed_count = result["removed_couplings_count"]
-            retained_count = result["retained_couplings_count"]
-            total_caps = result["coupling_capacitance_count"]
-            total_removed_couplings += removed_count
-            total_retained_couplings += retained_count
-
-            total_coupling_post = float(result["total_coupling_post_threshold"])
-            diff_post = float(result["coupling_minus_self_post_threshold"])
-            diff_records.append(
-                {
-                    "name": rwcap_file.name,
-                    "diff_pre": float(diff),
-                    "diff_post": diff_post,
-                    "ratio_pre": float(ratio),
-                    "ratio_post": (abs(diff_post) / total_coupling_post) if total_coupling_post else float("inf"),
-                    "total_coupling_pre_threshold": float(total_coupling),
-                    "total_coupling_post_threshold": total_coupling_post,
-                    "removed_couplings_count": removed_count,
-                    "retained_couplings_count": retained_count,
-                    "total_coupling_capacitances": total_caps,
-                }
-            )
-
-            # Report removed couplings for this file
-            tqdm.write(
-                f"[rwcap_to_spef] {result['window_id']}.spef: Retained {retained_count:,} coupling capacitances, removed {removed_count:,} below the {coupling_threshold_ratio:.1%} threshold"
-            )
-
-        except Exception as exc:  # pragma: no cover - diagnostics
-            failures += 1
-            tqdm.write(f"[rwcap_to_spef] Failed on {rwcap_file}: {exc}")
-
-    iterator.close()
-
-    if diff_records:
-        sorted_by_ratio = sorted(diff_records, key=lambda r: r["ratio_pre"], reverse=True)
-
-        def ratio_str(value: float) -> str:
-            if not math.isfinite(value):
-                return "∞"
-            return f"{value:.2%}"
-
-        print("[rwcap_to_spef] Largest relative discrepancies (|Σc-Σs| / Σc, includes removed couplings):")
-        for record in sorted_by_ratio[:5]:
-            print(
-                f"  - {record['name']}: ratio={ratio_str(record['ratio_pre'])} "
-                f"(|Σc-Σs|={abs(record['diff_pre']):.3e} F, Σc={record['total_coupling_pre_threshold']:.3e} F)"
-            )
-            if math.isfinite(record["ratio_post"]):
-                print(
-                    f"      ↳ After threshold: ratio={ratio_str(record['ratio_post'])}, "
-                    f"Σc_retained={record['total_coupling_post_threshold']:.3e} F"
+    if mode == "block":
+        # Block-level conversion
+        iterator = tqdm(rwcap_files, desc=desc, unit="file")
+        
+        for rwcap_file in iterator:
+            try:
+                result = convert_single_file_block(
+                    rwcap_file,
+                    output_dir,
+                    coupling_threshold_ratio=coupling_threshold_ratio,
                 )
+                removed_count = result["removed_couplings_count"]
+                retained_count = result["retained_couplings_count"]
+                total_removed_couplings += removed_count
+                total_retained_couplings += retained_count
+
+                tqdm.write(
+                    f"[rwcap_to_spef] {result['window_id']}.spef: "
+                    f"{result['blocks_with_data']} blocks, "
+                    f"retained {retained_count:,} couplings, "
+                    f"removed {removed_count:,} below {coupling_threshold_ratio:.1%} threshold"
+                )
+
+            except Exception as exc:
+                failures += 1
+                tqdm.write(f"[rwcap_to_spef] Failed on {rwcap_file}: {exc}")
+
+        iterator.close()
+
+    else:
+        # Net-level conversion (original behavior)
+        diff_records: List[Dict[str, object]] = []
+        iterator = tqdm(rwcap_files, desc=desc, unit="file")
+
+        for rwcap_file in iterator:
+            try:
+                result = convert_single_file(
+                    rwcap_file,
+                    output_dir,
+                    coupling_threshold_ratio=coupling_threshold_ratio,
+                )
+                total_coupling = result["total_coupling_pre_threshold"]
+                diff = result["coupling_minus_self_pre_threshold"]
+                ratio = (abs(diff) / total_coupling) if total_coupling else float("inf")
+                removed_count = result["removed_couplings_count"]
+                retained_count = result["retained_couplings_count"]
+                total_caps = result["coupling_capacitance_count"]
+                total_removed_couplings += removed_count
+                total_retained_couplings += retained_count
+
+                total_coupling_post = float(result["total_coupling_post_threshold"])
+                diff_post = float(result["coupling_minus_self_post_threshold"])
+                diff_records.append(
+                    {
+                        "name": rwcap_file.name,
+                        "diff_pre": float(diff),
+                        "diff_post": diff_post,
+                        "ratio_pre": float(ratio),
+                        "ratio_post": (abs(diff_post) / total_coupling_post) if total_coupling_post else float("inf"),
+                        "total_coupling_pre_threshold": float(total_coupling),
+                        "total_coupling_post_threshold": total_coupling_post,
+                        "removed_couplings_count": removed_count,
+                        "retained_couplings_count": retained_count,
+                        "total_coupling_capacitances": total_caps,
+                    }
+                )
+
+                tqdm.write(
+                    f"[rwcap_to_spef] {result['window_id']}.spef: Retained {retained_count:,} coupling capacitances, removed {removed_count:,} below the {coupling_threshold_ratio:.1%} threshold"
+                )
+
+            except Exception as exc:
+                failures += 1
+                tqdm.write(f"[rwcap_to_spef] Failed on {rwcap_file}: {exc}")
+
+        iterator.close()
+
+        if diff_records:
+            sorted_by_ratio = sorted(diff_records, key=lambda r: r["ratio_pre"], reverse=True)
+
+            def ratio_str(value: float) -> str:
+                if not math.isfinite(value):
+                    return "∞"
+                return f"{value:.2%}"
+
+            print("[rwcap_to_spef] Largest relative discrepancies (|Σc-Σs| / Σc, includes removed couplings):")
+            for record in sorted_by_ratio[:5]:
+                print(
+                    f"  - {record['name']}: ratio={ratio_str(record['ratio_pre'])} "
+                    f"(|Σc-Σs|={abs(record['diff_pre']):.3e} F, Σc={record['total_coupling_pre_threshold']:.3e} F)"
+                )
+                if math.isfinite(record["ratio_post"]):
+                    print(
+                        f"      ↳ After threshold: ratio={ratio_str(record['ratio_post'])}, "
+                        f"Σc_retained={record['total_coupling_post_threshold']:.3e} F"
+                    )
 
     if failures:
         print(f"[rwcap_to_spef] {failures} file(s) failed", file=sys.stderr)
         return 2
 
-    print(f"[rwcap_to_spef] Converted {len(rwcap_files)} files into {output_dir}")
+    mode_desc = "block-level" if mode == "block" else "net-level"
+    print(f"[rwcap_to_spef] Converted {len(rwcap_files)} {mode_desc} files into {output_dir}")
     if total_retained_couplings or total_removed_couplings:
         print(
             f"[rwcap_to_spef] Coupling summary: {total_retained_couplings:,} retained / {total_removed_couplings:,} removed across {len(rwcap_files)} files ({coupling_threshold_ratio:.1%} threshold)"
@@ -454,9 +795,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
 
-    parser = argparse.ArgumentParser(description="Convert RWCap output to SPEF format")
-    parser.add_argument("rwcap_dir", help="Directory containing RWCap .out files")
+    parser = argparse.ArgumentParser(
+        description="Convert RWCap output to SPEF format",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Convert net-level .out files (default)
+  python rwcap_to_spef.py out_rwcap labels_rwcap
+
+  # Convert block-level _block.txt files
+  python rwcap_to_spef.py out_rwcap labels_rwcap_block --mode block
+"""
+    )
+    parser.add_argument("rwcap_dir", help="Directory containing RWCap output files")
     parser.add_argument("spef_dir", help="Output directory for SPEF files")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["net", "block"],
+        default="net",
+        help="Conversion mode: 'net' for .out files (per-net capacitances), 'block' for _block.txt files (per-block capacitances). Default: net",
+    )
     parser.add_argument(
         "--coupling-threshold",
         type=float,
@@ -472,6 +831,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     return convert_directory(
         input_dir,
         output_dir,
+        mode=args.mode,
         coupling_threshold_ratio=args.coupling_threshold,
     )
 

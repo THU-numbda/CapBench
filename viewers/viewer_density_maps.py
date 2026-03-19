@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Interactive VTK viewer for CNN-Cap density maps with optional CAP3D overlay.
+Interactive VTK viewer for CapBench density maps with optional CAP3D overlay.
 
 Given a density-map NPZ (as produced by `converters/cnn_cap.py`), this tool
 renders each per-layer density image as a translucent slice positioned at the
@@ -56,7 +56,7 @@ PALETTE: Tuple[Tuple[int, int, int], ...] = (
 
 @dataclass
 class DensityDataset:
-    """In-memory representation of a CNN-Cap density NPZ file."""
+    """In-memory representation of a CapBench density NPZ file."""
 
     path: Path
     layers: List[str]
@@ -552,7 +552,7 @@ def launch_viewer(renderer: "vtk.vtkRenderer", start_angle: float, screenshot: O
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Visualize CNN-Cap density maps with optional CAP3D overlay.")
+    parser = argparse.ArgumentParser(description="Visualize CapBench density maps with optional CAP3D overlay.")
     parser.add_argument("density_map", help="Path to density-map NPZ produced by converters/cnn_cap.py")
     parser.add_argument("--cap3d", help="Optional CAP3D file for faint geometry overlay")
     parser.add_argument("--max-blocks", type=int, default=40000, help="Limit number of CAP3D blocks rendered (0 = no limit)")

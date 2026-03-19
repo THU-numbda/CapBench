@@ -56,6 +56,7 @@ class ParserState:
     pending_window: Optional[Window]
     pending_task: Optional[Task]
     pending_plate_medium: Optional[PlateMedium]
+    current_section_blocks: List[Block]
 
     def __init__(self) -> None:
         # Section state
@@ -85,6 +86,7 @@ class ParserState:
         self.pending_window = None
         self.pending_task = None
         self.pending_plate_medium = None
+        self.current_section_blocks = []
 
 
 class StreamingCap3DParser:
@@ -402,16 +404,19 @@ class StreamingCap3DParser:
         state.current_section = 'medium'
         state.current_section_name = None
         state.current_diel = None
-    
+        state.current_section_blocks = []
+
     def _start_conductor(self, state: ParserState) -> None:
         state.current_section = 'conductor'
         state.current_section_name = None
         state.current_diel = None
-    
+        state.current_section_blocks = []
+
     def _end_section(self, state: ParserState) -> None:
         state.current_section = None
         state.current_section_name = None
         state.current_diel = None
+        state.current_section_blocks = []
     
     def _start_block(self, state: ParserState) -> None:
         state.in_block = True
@@ -429,6 +434,7 @@ class StreamingCap3DParser:
                 state.pending_block = block
                 self.stats['total_blocks'] += 1
                 if block.type == 'medium':
+                    state.current_section_blocks.append(block)
                     self.stats['mediums'] += 1
         else:
             self.stats['conductors'] += 1
@@ -603,6 +609,8 @@ class StreamingCap3DParser:
             state.current_section_name = line[5:].strip()
         elif state.current_section == 'medium' and line.startswith('diel '):
             state.current_diel = float(line[5:].strip())
+            for block in state.current_section_blocks:
+                block.diel = state.current_diel
         else:
             return False
         return True
@@ -675,7 +683,8 @@ class StreamingCap3DParser:
             v1=np.array(poly_data['v1'], dtype=np.float32),
             v2=np.array(poly_data['v2'], dtype=np.float32),
             hvector=np.array(poly_data['hvec'], dtype=np.float32),
-            coordinates=coordinates
+            coordinates=coordinates,
+            section_type=poly_data.get('section_type'),
         )
 
     def _parse_coordinate_pairs(self, coord_text: str) -> List[Tuple[float, float]]:

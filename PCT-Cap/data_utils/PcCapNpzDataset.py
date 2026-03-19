@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+from tqdm import tqdm
 
 try:
     from torch.utils.data import Dataset  # type: ignore
@@ -39,7 +40,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from .sampler import PcCapSampler, RandomSampler
 from .transform import PcCapTransform, NormalizeTransform
-from spef_tools.spef_to_simple import parse_spef_components
+from spef_tools.openrcx_to_simple_spef import parse_spef_components
 from spef_tools.python_parser import load_dnet_totals
 
 try:  # Optional dependency; only required when iterating the dataset.
@@ -133,10 +134,7 @@ class PcCapNpzDataset(Dataset):
 
         # Filter by process node if specified
         if self.process_node is not None:
-            print(f"Process node filtering enabled: keeping only windows from '{self.process_node}'")
             window_ids = self._filter_by_process_node(window_ids)
-        else:
-            print("Warning: No process node filtering specified - dataset may contain mixed process nodes")
 
         self._windows: List[_WindowPointCloud] = []
         self._window_samples_self: List[List[_SampleSpec]] = []  # Per-window sample arrays
@@ -145,7 +143,12 @@ class PcCapNpzDataset(Dataset):
         self._window_spef_paths: Dict[str, Path] = {}
         self.window_stats: Dict[str, Dict[str, int]] = {}
 
-        for idx, win_id in enumerate(window_ids):
+        for idx, win_id in tqdm(
+            enumerate(window_ids),
+            total=len(window_ids),
+            desc="Loading point clouds",
+            unit="win",
+        ):
             npz_path = self.point_cloud_dir / f"{win_id}.npz"
             if not npz_path.exists():
                 raise FileNotFoundError(f"Point cloud missing for window {win_id}: {npz_path}")
@@ -206,9 +209,6 @@ class PcCapNpzDataset(Dataset):
                 f"No samples generated for goal '{self.goal}'. "
                 "Check that the SPEF files contain matching conductors."
             )
-
-        # Report comprehensive statistics
-        self._report_dataset_statistics()
 
     # ------------------------------------------------------------------
     # Dataset API
@@ -493,7 +493,8 @@ class PcCapNpzDataset(Dataset):
             master_id = self._lookup_conductor(window, master_name)
             if master_id is None:
                 continue
-            for neighbor_name, value in neighbors.items():
+            neighbor_iter = neighbors.items() if isinstance(neighbors, dict) else neighbors
+            for neighbor_name, value in neighbor_iter:
                 # MANDATORY SPEF VALIDATION: Check if coupling exists and is positive
                 if value <= 1e-20:  # Skip very small/negative couplings
                     continue
@@ -530,14 +531,6 @@ class PcCapNpzDataset(Dataset):
                     spef_source=spef_path,
                     process_node=process_node,
                 )
-            )
-
-        if not samples_self and not samples_coupling:
-            print(f"WARNING: No capacitance entries matched for window {window.window_id}")
-        else:
-            print(
-                f"Window {window.window_id}: {len(samples_self)} self, {len(samples_coupling)} coupling, "
-                f"{len(samples_self) + len(samples_coupling)} total samples (goal={self.goal})"
             )
 
         return samples_self, samples_coupling
@@ -594,57 +587,3 @@ class PcCapNpzDataset(Dataset):
             return float("inf")
         x, y, z = coord
         return float(x * x + y * y + z * z)
-
-    def _report_dataset_statistics(self):
-        """Report comprehensive dataset statistics."""
-        # Window statistics
-        total_windows = len(self._windows)
-        windows_with_spef = len(self._window_spef_paths)
-
-        # Sample statistics
-        total_self_samples = 0
-        total_coupling_samples = 0
-        process_node_counts = {}
-
-        for window_samples_self in self._window_samples_self:
-            for sample in window_samples_self:
-                total_self_samples += 1
-                # Count process nodes
-                process_node = sample.process_node or "unknown"
-                process_node_counts[process_node] = process_node_counts.get(process_node, 0) + 1
-
-        for window_samples_coupling in self._window_samples_coupling:
-            for sample in window_samples_coupling:
-                total_coupling_samples += 1
-                # Count process nodes
-                process_node = sample.process_node or "unknown"
-                process_node_counts[process_node] = process_node_counts.get(process_node, 0) + 1
-
-        total_samples = total_self_samples + total_coupling_samples
-
-        # SPEF coverage statistics
-        spef_coverage = windows_with_spef / total_windows * 100 if total_windows > 0 else 0
-
-        print(f"\n=== PCT-Cap Dataset Statistics ===")
-        print(f"Total windows: {total_windows}")
-        print(f"Windows with SPEF files: {windows_with_spef} ({spef_coverage:.1f}%)")
-        print(f"Self-capacitance samples: {total_self_samples}")
-        print(f"Coupling-capacitance samples: {total_coupling_samples}")
-        print(f"Total samples: {total_samples}")
-        print(f"Goal: {self.goal}")
-        print(f"Process nodes: {dict(process_node_counts)}")
-
-        # Per-window breakdown
-        print(f"\n=== Per-Window Sample Distribution ===")
-        for window_id, window_samples_self, window_samples_coupling in zip(
-            self._window_ids, self._window_samples_self, self._window_samples_coupling
-        ):
-            n_self = len(window_samples_self)
-            n_coupling = len(window_samples_coupling)
-            process_node = window_samples_self[0].process_node if window_samples_self else (
-                window_samples_coupling[0].process_node if window_samples_coupling else "unknown"
-            )
-            print(f"{window_id} ({process_node}): {n_self} self, {n_coupling} coupling, {n_self + n_coupling} total")
-
-        print(f"\nDataset point count: {self.npoints}")
-        print(f"Sample counts by type: {self.sample_counts}")

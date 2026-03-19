@@ -243,17 +243,27 @@ class PointCloudGenerator:
             (bp + v1, v2, hvec, np.array([1, 0, 0])),
         ]
 
-        # Compute area for each face to determine sampling probabilities
-        face_areas = []
-        for _, edge1, edge2, _ in faces:
-            area = np.linalg.norm(np.cross(edge1, edge2))
-            face_areas.append(area)
+        # Compute area for each face to determine sampling probabilities.
+        # Use float64 normalization here because block geometry is stored as
+        # float32, and np.random.choice is strict about probabilities summing to 1.
+        face_areas = np.asarray(
+            [np.linalg.norm(np.cross(edge1, edge2)) for _, edge1, edge2, _ in faces],
+            dtype=np.float64,
+        )
+        face_areas[~np.isfinite(face_areas)] = 0.0
+        face_areas = np.clip(face_areas, 0.0, None)
 
-        total_face_area = sum(face_areas)
-        if total_face_area > 0:
-            face_probs = [area / total_face_area for area in face_areas]
+        total_face_area = float(face_areas.sum())
+        if total_face_area > 0.0:
+            face_probs = face_areas / total_face_area
+            face_probs[-1] = max(0.0, 1.0 - float(face_probs[:-1].sum()))
+            prob_sum = float(face_probs.sum())
+            if prob_sum <= 0.0 or not np.isfinite(prob_sum):
+                face_probs = np.full(len(faces), 1.0 / len(faces), dtype=np.float64)
+            else:
+                face_probs /= prob_sum
         else:
-            face_probs = [1.0 / len(faces)] * len(faces)
+            face_probs = np.full(len(faces), 1.0 / len(faces), dtype=np.float64)
 
         # Assign points to faces based on probabilities
         face_indices = np.random.choice(len(faces), size=total_points, p=face_probs)
@@ -324,13 +334,18 @@ class PointCloudGenerator:
                 block_areas.append(area)
                 block_list.append(block)
 
-        total_area = sum(block_areas)
+        total_area = float(np.sum(np.asarray(block_areas, dtype=np.float64)))
+        if total_area <= 0.0 or not np.isfinite(total_area):
+            total_area = float(len(block_areas)) if block_areas else 1.0
 
         # Sample points proportional to surface area
 
         for block, area in zip(block_list, block_areas):
             # Number of points for this block (proportional to area)
-            block_point_count = max(1, int(self.total_points * area / total_area))
+            area_value = float(area)
+            if area_value <= 0.0 or not np.isfinite(area_value):
+                area_value = 1.0
+            block_point_count = max(1, int(self.total_points * area_value / total_area))
 
             # Determine flux sign based on PCT-Cap paper (Gauss's law)
             # Φ = +1 for master conductor (electric field originates)

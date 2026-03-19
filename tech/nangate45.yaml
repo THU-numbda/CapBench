@@ -6,13 +6,13 @@ stack:
   - { name: SUBSTRATE, type: dielectric, thickness_um: 0.5, er: 11.9 }
   - { name: M1_TO_M2_PART1, type: dielectric, thickness_um: 0.12, er: 2.5 }
   - { name: M1_TO_M2_PART2, type: dielectric, thickness_um: 0.14, er: 2.5 }
-  - { name: metal1, type: metal, thickness_um: 0.13, wmin_um: 0.0733 }
+  - { name: metal1, type: metal, thickness_um: 0.13, wmin_um: 0.065 }
   - { name: M2_TO_M3_PART1, type: dielectric, thickness_um: 0.12, er: 2.5 }
   - { name: M2_TO_M3_PART2, type: dielectric, thickness_um: 0.14, er: 2.5 }
-  - { name: metal2, type: metal, thickness_um: 0.14, wmin_um: 0.0197 }
+  - { name: metal2, type: metal, thickness_um: 0.14, wmin_um: 0.07 }
   - { name: M3_TO_M4_PART1, type: dielectric, thickness_um: 0.12, er: 2.5 }
   - { name: M3_TO_M4_PART2, type: dielectric, thickness_um: 0.14, er: 2.5 }
-  - { name: metal3, type: metal, thickness_um: 0.14, wmin_um: 0.0246 }
+  - { name: metal3, type: metal, thickness_um: 0.14, wmin_um: 0.07 }
   - { name: M4_TO_M5_PART1, type: dielectric, thickness_um: 0.12, er: 2.5 }
   - { name: M4_TO_M5_PART2, type: dielectric, thickness_um: 0.14, er: 2.5 }
   - { name: metal4, type: metal, thickness_um: 0.28, wmin_um: 0.1416 }
@@ -38,9 +38,9 @@ stack:
 
 # Vias with connectivity and minimum widths only
 vias:
-  via1: { from: metal1, to: metal2, wmin_um: 0.0733 }
-  via2: { from: metal2, to: metal3, wmin_um: 0.0733 }
-  via3: { from: metal3, to: metal4, wmin_um: 0.0733 }
+  via1: { from: metal1, to: metal2, wmin_um: 0.065 }
+  via2: { from: metal2, to: metal3, wmin_um: 0.07 }
+  via3: { from: metal3, to: metal4, wmin_um: 0.07 }
   via4: { from: metal4, to: metal5, wmin_um: 0.1416 }
   via5: { from: metal5, to: metal6, wmin_um: 0.1416 }
   via6: { from: metal6, to: metal7, wmin_um: 0.1416 }

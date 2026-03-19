@@ -1,0 +1,14 @@
+CNNCap/
+datasets/cnncap_small/
+# Python bytecode caches anywhere in the tree.
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.cache/
+datasets/
+simc28.itf
+smic28.itf
+experiments/**/out/
+experiments/**/out_strict/
