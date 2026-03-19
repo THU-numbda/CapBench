@@ -8,8 +8,10 @@ from .cache import get_cache_dir
 from .datasets import (
     ensure_dataset,
     get_dataset_info,
+    install_dataset,
     list_datasets,
     materialize_dataset,
+    prepare_dataset,
     preprocess_dataset,
     resolve_dataset_path,
 )
@@ -24,9 +26,10 @@ __all__ = [
     "ensure_dataset",
     "get_cache_dir",
     "get_dataset_info",
+    "install_dataset",
     "list_datasets",
     "materialize_dataset",
+    "prepare_dataset",
     "preprocess_dataset",
     "resolve_dataset_path",
 ]
-

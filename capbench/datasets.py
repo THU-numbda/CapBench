@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import sys
@@ -12,8 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
 from .cache import (
+    ARTIFACT_RELATIVE_PATHS,
     artifact_exists,
-    artifact_path,
     cache_download_dir,
     dataset_cache_base,
     normalize_artifact_name,
@@ -130,6 +129,17 @@ def _update_state(entry: DatasetEntry, selected_source: DatasetSource, workspace
     write_dataset_state(list(entry.path_parts), payload)
 
 
+def _installed_workspace_root(entry: DatasetEntry) -> Path | None:
+    cache_base = dataset_cache_base(list(entry.path_parts), entry.version, create=False)
+    workspace_link = cache_base / "workspace"
+    if not workspace_link.exists():
+        return None
+    workspace_root = workspace_link.resolve()
+    if not workspace_root.exists():
+        return None
+    return workspace_root
+
+
 def _ensure_registered_dataset(entry: DatasetEntry, *, source_name: str | None = None) -> Path:
     source = _select_source(entry, source_name)
     archive_path = _download_archive(source)
@@ -179,6 +189,78 @@ def _ensure_artifacts(entry: DatasetEntry, dataset_root: Path, artifacts: Sequen
             raise RuntimeError(f"Pipeline stage '{stage}' did not produce required artifact '{artifact}'")
 
 
+def _default_prepare_artifacts(entry: DatasetEntry) -> tuple[str, ...]:
+    configured = {normalize_artifact_name(name) for name in entry.derivable_artifacts}
+    if configured:
+        return tuple(sorted(configured))
+    return tuple(sorted(DERIVABLE_ARTIFACTS))
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+        return
+    if path.is_dir():
+        shutil.rmtree(path)
+
+
+def _cleanup_dataset_root(entry: DatasetEntry, dataset_root: Path) -> list[Path]:
+    removed: list[Path] = []
+
+    for artifact in _default_prepare_artifacts(entry):
+        artifact_dir = dataset_root / ARTIFACT_RELATIVE_PATHS[artifact]
+        if artifact_dir.is_dir():
+            try:
+                next(artifact_dir.iterdir())
+            except StopIteration:
+                shutil.rmtree(artifact_dir)
+                removed.append(artifact_dir)
+
+        tmp_dir = artifact_dir.with_name(artifact_dir.name + ".tmp")
+        if tmp_dir.exists() or tmp_dir.is_symlink():
+            _remove_path(tmp_dir)
+            removed.append(tmp_dir)
+
+    return removed
+
+
+def _missing_artifacts(dataset_root: Path, artifacts: Sequence[str]) -> list[str]:
+    missing: list[str] = []
+    for artifact in [normalize_artifact_name(name) for name in artifacts]:
+        if not artifact_exists(dataset_root, artifact):
+            missing.append(artifact)
+    return missing
+
+
+def _install_guidance(dataset_id: str) -> str:
+    return f"Run `capbench datasets install {dataset_id}` first."
+
+
+def _require_registered_dataset(entry: DatasetEntry, *, artifacts: Sequence[str] = ()) -> Path:
+    dataset_root = _installed_workspace_root(entry)
+    if dataset_root is None:
+        raise FileNotFoundError(
+            f"Dataset '{entry.dataset_id}' is not installed in the CapBench cache. {_install_guidance(entry.dataset_id)}"
+        )
+
+    missing = _missing_artifacts(dataset_root, artifacts)
+    if missing:
+        missing_text = ", ".join(missing)
+        raise FileNotFoundError(
+            f"Dataset '{entry.dataset_id}' is installed but missing required artifacts: {missing_text}. "
+            f"{_install_guidance(entry.dataset_id)}"
+        )
+    return dataset_root
+
+
+def _require_explicit_dataset_path(dataset_root: Path, *, artifacts: Sequence[str] = ()) -> Path:
+    missing = _missing_artifacts(dataset_root, artifacts)
+    if missing:
+        missing_text = ", ".join(missing)
+        raise FileNotFoundError(f"Dataset path '{dataset_root}' is missing required artifacts: {missing_text}")
+    return dataset_root
+
+
 def _default_materialize_path(entry: DatasetEntry) -> Path:
     return get_workspace_root(create=True).joinpath(*entry.path_parts)
 
@@ -208,6 +290,39 @@ def ensure_dataset(dataset: str, *, artifacts: Sequence[str] = (), source: str |
     return dataset_root
 
 
+def install_dataset(
+    dataset: str,
+    *,
+    source: str | None = None,
+    materialize: bool = False,
+    destination: str | Path | None = None,
+) -> Path:
+    entry = get_dataset_entry(dataset)
+    dataset_root = _ensure_registered_dataset(entry, source_name=source)
+    removed_paths = _cleanup_dataset_root(entry, dataset_root)
+    for removed in removed_paths:
+        print(f"Removed stale path: {removed}")
+    artifacts = _default_prepare_artifacts(entry)
+    if artifacts:
+        _ensure_artifacts(entry, dataset_root, artifacts)
+    _update_state(entry, _select_source(entry, source), dataset_root)
+
+    if materialize or destination is not None:
+        target = _default_materialize_path(entry) if destination is None else Path(destination)
+        return _materialize_symlink(dataset_root, target)
+    return dataset_root
+
+
+def prepare_dataset(
+    dataset: str,
+    *,
+    source: str | None = None,
+    materialize: bool = False,
+    destination: str | Path | None = None,
+) -> Path:
+    return install_dataset(dataset, source=source, materialize=materialize, destination=destination)
+
+
 def preprocess_dataset(dataset: str, *, artifacts: Sequence[str]) -> Path:
     entry = get_dataset_entry(dataset)
     dataset_root = _ensure_registered_dataset(entry)
@@ -224,7 +339,8 @@ def materialize_dataset(
     source: str | None = None,
 ) -> Path:
     entry = get_dataset_entry(dataset)
-    dataset_root = ensure_dataset(dataset, artifacts=artifacts, source=source)
+    del source
+    dataset_root = _require_registered_dataset(entry, artifacts=artifacts)
     target = _default_materialize_path(entry) if destination is None else Path(destination)
     return _materialize_symlink(dataset_root, target)
 
@@ -238,18 +354,20 @@ def resolve_dataset_path(
 ) -> Path:
     candidate = Path(dataset).expanduser()
     if candidate.exists():
-        return candidate.resolve()
+        return _require_explicit_dataset_path(candidate.resolve(), artifacts=artifacts)
+    entry = get_dataset_entry(str(dataset))
+    dataset_root = _require_registered_dataset(entry, artifacts=artifacts)
     if materialize:
-        return materialize_dataset(str(dataset), destination=destination, artifacts=artifacts)
-    return ensure_dataset(str(dataset), artifacts=artifacts)
+        target = _default_materialize_path(entry) if destination is None else Path(destination)
+        return _materialize_symlink(dataset_root, target)
+    return dataset_root
 
 
 def get_dataset_info(dataset: str) -> Dict[str, Any]:
     entry = get_dataset_entry(dataset)
     cache_base = dataset_cache_base(list(entry.path_parts), entry.version, create=False)
     state = read_dataset_state(list(entry.path_parts))
-    workspace_link = cache_base / "workspace"
-    workspace_root = workspace_link.resolve() if workspace_link.exists() else None
+    workspace_root = _installed_workspace_root(entry)
     artifact_status = {
         artifact: (artifact_exists(workspace_root, artifact) if workspace_root is not None else False)
         for artifact in sorted(set(entry.bundled_artifacts) | set(entry.derivable_artifacts))

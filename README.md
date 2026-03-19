@@ -44,16 +44,18 @@ If you are already inside your PyTorch container, just run the same `python -m p
 capbench datasets list
 ```
 
-3. Download a dataset into the shared cache:
+3. Install a dataset in one step:
 
 ```bash
-capbench datasets ensure nangate45/small
+capbench datasets install nangate45/small
 ```
 
-4. Materialize a workspace symlink into the current clone if you want a local `datasets/` tree:
+This downloads the dataset into the shared cache, cleans partial preprocessing leftovers, and generates all configured derivable artifacts up front.
+
+4. If you also want a local `datasets/` symlink tree in the current clone:
 
 ```bash
-capbench datasets materialize nangate45/small
+capbench datasets install nangate45/small --materialize
 ```
 
 By default this creates:
@@ -96,12 +98,17 @@ The cache is the source of truth. Repo-local `datasets/` paths are optional syml
 ```bash
 capbench datasets list
 capbench datasets info nangate45/small
+capbench datasets install nangate45/small
 capbench datasets ensure nangate45/small --artifact density_maps binary-masks
 capbench datasets materialize nangate45/small
 capbench datasets preprocess nangate45/small --artifact point_clouds
 ```
 
-`ensure` downloads the dataset into the shared cache. If requested artifacts are missing and derivable, CapBench generates them into the cached workspace.
+`install` is the recommended one-shot setup command. It downloads the dataset into the shared cache and generates all configured derivable artifacts up front.
+
+Loaders and visualization commands no longer generate or download artifacts implicitly. Run `capbench datasets install <dataset>` first, then use the cached dataset normally.
+
+`ensure`, `materialize`, and `preprocess` remain available for incremental or developer workflows when you only want part of the dataset state.
 
 ### Visualization
 
@@ -131,10 +138,10 @@ These tools remain available for dataset authoring and maintenance, but they are
 The supported public namespace is `capbench.*`.
 
 ```python
-from capbench.datasets import ensure_dataset, resolve_dataset_path
+from capbench.datasets import install_dataset, resolve_dataset_path
 from capbench.dataloaders import load_density_window_dataset, load_binary_mask_window_dataset
 
-root = ensure_dataset("nangate45/small", artifacts=["binary-masks"])
+root = install_dataset("nangate45/small")
 dataset = load_binary_mask_window_dataset("nangate45/small", goal="self")
 ```
 

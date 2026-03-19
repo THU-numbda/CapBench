@@ -8,10 +8,72 @@ from pathlib import Path
 from typing import Sequence
 
 from . import __version__
-from .datasets import ensure_dataset, get_dataset_info, list_datasets, materialize_dataset, preprocess_dataset
+from .datasets import ensure_dataset, get_dataset_info, install_dataset, list_datasets, materialize_dataset, preprocess_dataset
 from .dev import list_dev_tools, run_dev_tool
 from .paths import get_cache_dir
 from .visualize import visualize_cap3d, visualize_density, visualize_point_cloud
+
+
+def _artifact_mode(info: dict[str, object], artifact: str) -> str:
+    labels: list[str] = []
+    bundled = set(info["bundled_artifacts"])
+    derivable = dict(info["derivable_artifacts"])
+    if artifact in bundled:
+        labels.append("bundled")
+    stage = derivable.get(artifact)
+    if stage is not None:
+        labels.append(f"stage:{stage}")
+    return ", ".join(labels) or "-"
+
+
+def _dataset_status_rows(info: dict[str, object]) -> list[tuple[str, str, str]]:
+    artifacts = sorted(set(info["bundled_artifacts"]) | set(info["derivable_artifacts"]))
+    status = dict(info["artifact_status"])
+    return [
+        (
+            artifact,
+            "ready" if status.get(artifact) else "missing",
+            _artifact_mode(info, artifact),
+        )
+        for artifact in artifacts
+    ]
+
+
+def _print_dataset_status(info: dict[str, object]) -> None:
+    title = f"Dataset state: {info['id']}"
+    workspace = info["workspace_root"] or "not installed"
+    rows = _dataset_status_rows(info)
+
+    try:
+        from rich.console import Console
+        from rich.table import Table
+    except ImportError:
+        print(title)
+        print(f"  Cache root: {info['cache_root']}")
+        print(f"  Workspace:  {workspace}")
+        headers = ("Artifact", "Status", "Provision")
+        widths = [len(header) for header in headers]
+        for row in rows:
+            for index, value in enumerate(row):
+                widths[index] = max(widths[index], len(value))
+        header_row = " | ".join(header.ljust(widths[index]) for index, header in enumerate(headers))
+        separator = "-+-".join("-" * width for width in widths)
+        print(header_row)
+        print(separator)
+        for row in rows:
+            print(" | ".join(value.ljust(widths[index]) for index, value in enumerate(row)))
+        return
+
+    console = Console()
+    table = Table(title=title)
+    table.add_column("Artifact")
+    table.add_column("Status")
+    table.add_column("Provision")
+    for row in rows:
+        table.add_row(*row)
+    console.print(table)
+    console.print(f"[bold]Cache root:[/bold] {info['cache_root']}")
+    console.print(f"[bold]Workspace:[/bold] {workspace}")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -34,6 +96,20 @@ def _build_parser() -> argparse.ArgumentParser:
     datasets_ensure.add_argument("dataset")
     datasets_ensure.add_argument("--artifact", nargs="*", default=(), help="Required artifacts to verify or generate.")
     datasets_ensure.add_argument("--source", default=None, help="Override the configured dataset source name.")
+
+    datasets_install = datasets_subparsers.add_parser(
+        "install",
+        aliases=["prepare"],
+        help="Download a dataset and generate all configured cache artifacts in one step.",
+    )
+    datasets_install.add_argument("dataset")
+    datasets_install.add_argument("--source", default=None, help="Override the configured dataset source name.")
+    datasets_install.add_argument(
+        "--materialize",
+        action="store_true",
+        help="Also create a workspace symlink (defaults to ./datasets/<dataset>).",
+    )
+    datasets_install.add_argument("--to", type=Path, default=None, help="Destination path for the workspace symlink.")
 
     datasets_materialize = datasets_subparsers.add_parser(
         "materialize",
@@ -94,6 +170,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.datasets_command == "ensure":
             path = ensure_dataset(args.dataset, artifacts=args.artifact, source=args.source)
+            print(path)
+            return 0
+        if args.datasets_command in {"install", "prepare"}:
+            path = install_dataset(
+                args.dataset,
+                source=args.source,
+                materialize=args.materialize,
+                destination=args.to,
+            )
+            info = get_dataset_info(args.dataset)
+            _print_dataset_status(info)
             print(path)
             return 0
         if args.datasets_command == "materialize":
