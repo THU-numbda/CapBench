@@ -22,9 +22,9 @@ import time
 import gc
 import traceback
 from tqdm import tqdm
-import pya
 import psutil
 
+from capbench._internal.klayout_compat import pya, require_pya
 from capbench.preprocess.def_parser import (
     parse_def, filter_components_in_window, filter_nets_in_window, parse_lef_macro_sizes, write_def
 )
@@ -97,6 +97,8 @@ class WindowExtractor:
 
         # Downstream-only runs (cnn/pct) can reuse existing CAP3D artifacts without raw layout files
         self.requires_layout_inputs = self.should_run_stage('cap3d')
+        if self.requires_layout_inputs:
+            require_pya()
 
         # Get dataset-specific directories
         self.dataset_dirs = get_dataset_subdirs(self.output_dir)
@@ -371,7 +373,7 @@ class WindowExtractor:
             gc.collect()
 
             # Additional cleanup for any remaining pya objects
-            if 'pya' in globals():
+            if pya is not None and hasattr(pya, "Application"):
                 # This helps release any remaining KLayout C++ objects
                 pya.Application.instance().clear_layer_tables()
 

@@ -1,4 +1,4 @@
-"""Cache-backed dataset download, preprocessing, and materialization helpers."""
+"""Cache-backed dataset download and preprocessing helpers."""
 
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ from .cache import (
     read_dataset_state,
     write_dataset_state,
 )
-from .paths import get_workspace_root
 from .registry import DatasetEntry, DatasetSource, get_dataset_entry, list_dataset_entries
 
 
@@ -279,26 +278,6 @@ def _require_explicit_dataset_path(dataset_root: Path, *, artifacts: Sequence[st
     return dataset_root
 
 
-def _default_materialize_path(entry: DatasetEntry) -> Path:
-    return get_workspace_root(create=True).joinpath(*entry.path_parts)
-
-
-def _materialize_symlink(source_root: Path, destination: Path) -> Path:
-    destination = Path(destination).expanduser().resolve()
-    if destination.is_symlink():
-        if destination.resolve() == source_root.resolve():
-            return destination
-        destination.unlink()
-    elif destination.exists():
-        if destination.resolve() == source_root.resolve():
-            return destination
-        raise FileExistsError(f"Destination already exists and is not managed by CapBench: {destination}")
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.symlink_to(source_root, target_is_directory=True)
-    return destination
-
-
 def ensure_dataset(dataset: str, *, artifacts: Sequence[str] = (), source: str | None = None) -> Path:
     entry = get_dataset_entry(dataset)
     dataset_root = _ensure_registered_dataset(entry, source_name=source)
@@ -312,8 +291,6 @@ def install_dataset(
     dataset: str,
     *,
     source: str | None = None,
-    materialize: bool = False,
-    destination: str | Path | None = None,
 ) -> Path:
     entry = get_dataset_entry(dataset)
     dataset_root = _ensure_registered_dataset(entry, source_name=source)
@@ -324,10 +301,6 @@ def install_dataset(
     if artifacts:
         _ensure_artifacts(entry, dataset_root, artifacts)
     _update_state(entry, _select_source(entry, source), dataset_root)
-
-    if materialize or destination is not None:
-        target = _default_materialize_path(entry) if destination is None else Path(destination)
-        return _materialize_symlink(dataset_root, target)
     return dataset_root
 
 
@@ -335,10 +308,8 @@ def prepare_dataset(
     dataset: str,
     *,
     source: str | None = None,
-    materialize: bool = False,
-    destination: str | Path | None = None,
 ) -> Path:
-    return install_dataset(dataset, source=source, materialize=materialize, destination=destination)
+    return install_dataset(dataset, source=source)
 
 
 def preprocess_dataset(dataset: str, *, artifacts: Sequence[str]) -> Path:
@@ -349,36 +320,16 @@ def preprocess_dataset(dataset: str, *, artifacts: Sequence[str]) -> Path:
     return dataset_root
 
 
-def materialize_dataset(
-    dataset: str,
-    *,
-    destination: str | Path | None = None,
-    artifacts: Sequence[str] = (),
-    source: str | None = None,
-) -> Path:
-    entry = get_dataset_entry(dataset)
-    del source
-    dataset_root = _require_registered_dataset(entry, artifacts=artifacts)
-    target = _default_materialize_path(entry) if destination is None else Path(destination)
-    return _materialize_symlink(dataset_root, target)
-
-
 def resolve_dataset_path(
     dataset: str | Path,
     *,
     artifacts: Sequence[str] = (),
-    materialize: bool = False,
-    destination: str | Path | None = None,
 ) -> Path:
     candidate = Path(dataset).expanduser()
     if candidate.exists():
         return _require_explicit_dataset_path(candidate.resolve(), artifacts=artifacts)
     entry = get_dataset_entry(str(dataset))
-    dataset_root = _require_registered_dataset(entry, artifacts=artifacts)
-    if materialize:
-        target = _default_materialize_path(entry) if destination is None else Path(destination)
-        return _materialize_symlink(dataset_root, target)
-    return dataset_root
+    return _require_registered_dataset(entry, artifacts=artifacts)
 
 
 def get_dataset_info(dataset: str) -> Dict[str, Any]:

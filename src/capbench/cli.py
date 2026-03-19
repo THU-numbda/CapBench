@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 from typing import Sequence
 
 from . import __version__
-from .datasets import ensure_dataset, get_dataset_info, install_dataset, list_datasets, materialize_dataset, preprocess_dataset
+from .datasets import ensure_dataset, get_dataset_info, install_dataset, list_datasets, preprocess_dataset
 from .dev import list_dev_tools, run_dev_tool
 from .paths import get_cache_dir
 from .visualize import visualize_cap3d, visualize_density, visualize_point_cloud
@@ -84,7 +83,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    datasets_parser = subparsers.add_parser("datasets", help="Dataset download, cache, and materialization commands.")
+    datasets_parser = subparsers.add_parser("datasets", help="Dataset download, cache, and preprocessing commands.")
     datasets_subparsers = datasets_parser.add_subparsers(dest="datasets_command", required=True)
 
     datasets_subparsers.add_parser("list", help="List registered datasets.")
@@ -104,21 +103,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     datasets_install.add_argument("dataset")
     datasets_install.add_argument("--source", default=None, help="Override the configured dataset source name.")
-    datasets_install.add_argument(
-        "--materialize",
-        action="store_true",
-        help="Also create a workspace symlink (defaults to ./datasets/<dataset>).",
-    )
-    datasets_install.add_argument("--to", type=Path, default=None, help="Destination path for the workspace symlink.")
-
-    datasets_materialize = datasets_subparsers.add_parser(
-        "materialize",
-        help="Create a workspace symlink for a cached dataset (defaults to ./datasets/<dataset>).",
-    )
-    datasets_materialize.add_argument("dataset")
-    datasets_materialize.add_argument("--artifact", nargs="*", default=(), help="Required artifacts to verify or generate.")
-    datasets_materialize.add_argument("--source", default=None, help="Override the configured dataset source name.")
-    datasets_materialize.add_argument("--to", type=Path, default=None, help="Destination path for the workspace symlink.")
 
     datasets_preprocess = datasets_subparsers.add_parser(
         "preprocess",
@@ -176,15 +160,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             path = install_dataset(
                 args.dataset,
                 source=args.source,
-                materialize=args.materialize,
-                destination=args.to,
             )
             info = get_dataset_info(args.dataset)
             _print_dataset_status(info)
-            print(path)
-            return 0
-        if args.datasets_command == "materialize":
-            path = materialize_dataset(args.dataset, destination=args.to, artifacts=args.artifact, source=args.source)
             print(path)
             return 0
         if args.datasets_command == "preprocess":

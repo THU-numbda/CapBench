@@ -29,14 +29,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple, Set, Optional, DefaultDict
 
+from capbench._internal.klayout_compat import pya, require_pya
 from capbench.preprocess.cap3d_writer import write_cap3d
 from capbench.preprocess.def_parser import parse_def
-
-try:
-    import pya
-except ImportError:
-    print("ERROR: This script must be run with KLayout in batch mode!")
-    sys.exit(1)
 
 
 # Strip everything except alphanumerics, underscore, and dot.
@@ -67,6 +62,7 @@ class DEF2Cap3D:
                  debug_probe: bool = False,
                  process_node: Optional[str] = None,
                  lef_files: Optional[List[str]] = None):
+        require_pya()
         self.gds_file = Path(gds_file)
         self.def_file = Path(def_file)
         self.output_file = Path(output_file)

@@ -20,19 +20,6 @@ def get_cache_dir(*, create: bool = False) -> Path:
         path.mkdir(parents=True, exist_ok=True)
     return path
 
-
-def get_workspace_root(*, create: bool = False) -> Path:
-    """Return the default materialization root for symlinked datasets."""
-    raw = os.environ.get("CAPBENCH_WORKSPACE_ROOT")
-    if raw:
-        path = Path(raw).expanduser().resolve()
-    else:
-        path = (Path.cwd() / "datasets").resolve()
-    if create:
-        path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
 def get_resource_root(*, create: bool = False) -> Path:
     """Return the root directory that contains packaged non-Python assets."""
     path = RESOURCE_ROOT.resolve()

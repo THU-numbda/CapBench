@@ -34,12 +34,14 @@ vis = [
   "vtk>=9.2",
 ]
 dev = [
+  "klayout",
   "pyvis",
   "rich",
   "rtree",
 ]
 all = [
   "einops",
+  "klayout",
   "matplotlib>=3.7",
   "medpy",
   "monai",

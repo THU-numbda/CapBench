@@ -68,19 +68,7 @@ python -m capbench datasets install nangate45/small
 
 This downloads the dataset into the shared cache, cleans partial preprocessing leftovers, and generates all configured derivable artifacts up front.
 
-4. If you also want a local `datasets/` symlink tree in the current clone:
-
-```bash
-python -m capbench datasets install nangate45/small --materialize
-```
-
-By default this creates:
-
-```text
-./datasets/nangate45/small -> ~/.cache/capbench/datasets/nangate45/small/<version>/workspace
-```
-
-5. Open a visualization:
+4. Open a visualization:
 
 ```bash
 python -m capbench visualize density --dataset nangate45/small --window W0
@@ -91,7 +79,6 @@ python -m capbench visualize cap3d --dataset nangate45/small --window W0
 ## Repository Layout
 
 - `src/capbench/`: the only installable Python package
-- `datasets/`: local materialized datasets or symlink workspaces
 - `reference/`: non-supported historical baselines, archived scripts, and flow snapshots kept for provenance
 
 ## Cache Model
@@ -108,10 +95,9 @@ CapBench stores downloaded and generated data in a shared user cache:
 Useful environment variables:
 
 - `CAPBENCH_CACHE_DIR`: override the shared cache root
-- `CAPBENCH_WORKSPACE_ROOT`: override where `materialize` creates symlinks
 - `CAPBENCH_DATASET_ROOT`: override the legacy default dataset root for older scripts
 
-The cache is the source of truth. Repo-local `datasets/` paths are optional symlinks created for convenience.
+The cache is the source of truth. CapBench now operates directly on cached dataset paths rather than creating repo-local symlink workspaces.
 
 ## Standard CLI
 
@@ -122,7 +108,6 @@ python -m capbench datasets list
 python -m capbench datasets info nangate45/small
 python -m capbench datasets install nangate45/small
 python -m capbench datasets ensure nangate45/small --artifact density_maps binary-masks
-python -m capbench datasets materialize nangate45/small
 python -m capbench datasets preprocess nangate45/small --artifact point_clouds
 ```
 
@@ -130,7 +115,7 @@ python -m capbench datasets preprocess nangate45/small --artifact point_clouds
 
 Loaders and visualization commands no longer generate or download artifacts implicitly. Run `python -m capbench datasets install <dataset>` first, then use the cached dataset normally.
 
-`ensure`, `materialize`, and `preprocess` remain available for incremental or developer workflows when you only want part of the dataset state.
+`ensure` and `preprocess` remain available for incremental or developer workflows when you only want part of the dataset state.
 
 ### Visualization
 
