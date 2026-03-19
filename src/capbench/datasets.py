@@ -251,7 +251,7 @@ def _missing_artifacts(dataset_root: Path, artifacts: Sequence[str]) -> list[str
 
 
 def _install_guidance(dataset_id: str) -> str:
-    return f"Run `capbench datasets install {dataset_id}` first."
+    return f"Run `python -m capbench datasets install {dataset_id}` first."
 
 
 def _require_registered_dataset(entry: DatasetEntry, *, artifacts: Sequence[str] = ()) -> Path:

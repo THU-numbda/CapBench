@@ -57,13 +57,13 @@ conda config --set auto_activate_base false
 2. Inspect the registered datasets:
 
 ```bash
-capbench datasets list
+python -m capbench datasets list
 ```
 
 3. Install a dataset in one step:
 
 ```bash
-capbench datasets install nangate45/small
+python -m capbench datasets install nangate45/small
 ```
 
 This downloads the dataset into the shared cache, cleans partial preprocessing leftovers, and generates all configured derivable artifacts up front.
@@ -71,7 +71,7 @@ This downloads the dataset into the shared cache, cleans partial preprocessing l
 4. If you also want a local `datasets/` symlink tree in the current clone:
 
 ```bash
-capbench datasets install nangate45/small --materialize
+python -m capbench datasets install nangate45/small --materialize
 ```
 
 By default this creates:
@@ -83,9 +83,9 @@ By default this creates:
 5. Open a visualization:
 
 ```bash
-capbench visualize density --dataset nangate45/small --window W0
-capbench visualize point-cloud --dataset nangate45/small --window W0
-capbench visualize cap3d --dataset nangate45/small --window W0
+python -m capbench visualize density --dataset nangate45/small --window W0
+python -m capbench visualize point-cloud --dataset nangate45/small --window W0
+python -m capbench visualize cap3d --dataset nangate45/small --window W0
 ```
 
 ## Repository Layout
@@ -118,39 +118,39 @@ The cache is the source of truth. Repo-local `datasets/` paths are optional syml
 ### Datasets
 
 ```bash
-capbench datasets list
-capbench datasets info nangate45/small
-capbench datasets install nangate45/small
-capbench datasets ensure nangate45/small --artifact density_maps binary-masks
-capbench datasets materialize nangate45/small
-capbench datasets preprocess nangate45/small --artifact point_clouds
+python -m capbench datasets list
+python -m capbench datasets info nangate45/small
+python -m capbench datasets install nangate45/small
+python -m capbench datasets ensure nangate45/small --artifact density_maps binary-masks
+python -m capbench datasets materialize nangate45/small
+python -m capbench datasets preprocess nangate45/small --artifact point_clouds
 ```
 
 `install` is the recommended one-shot setup command. It downloads the dataset into the shared cache and generates all configured derivable artifacts up front.
 
-Loaders and visualization commands no longer generate or download artifacts implicitly. Run `capbench datasets install <dataset>` first, then use the cached dataset normally.
+Loaders and visualization commands no longer generate or download artifacts implicitly. Run `python -m capbench datasets install <dataset>` first, then use the cached dataset normally.
 
 `ensure`, `materialize`, and `preprocess` remain available for incremental or developer workflows when you only want part of the dataset state.
 
 ### Visualization
 
 ```bash
-capbench visualize density --dataset nangate45/small --window W0
-capbench visualize point-cloud --dataset nangate45/small --window W0
-capbench visualize cap3d --dataset nangate45/small --window W0
+python -m capbench visualize density --dataset nangate45/small --window W0
+python -m capbench visualize point-cloud --dataset nangate45/small --window W0
+python -m capbench visualize cap3d --dataset nangate45/small --window W0
 ```
 
 ### Developer Tooling
 
-Developer-only flows are grouped under `capbench dev`:
+Developer-only flows are grouped under `python -m capbench dev`:
 
 ```bash
-capbench dev list
-capbench dev window-pipeline -- --windows-file /abs/path/windows.yaml --dataset-path /abs/path/dataset --pipeline binary_masks
-capbench dev partition-cap3d -- --dataset-path /abs/path/dataset
-capbench dev openrcx -- --process-nodes nangate45 --sizes small
-capbench dev rwcap -- --process-nodes nangate45 --sizes small
-capbench dev window-metadata -- --help
+python -m capbench dev list
+python -m capbench dev window-pipeline -- --windows-file /abs/path/windows.yaml --dataset-path /abs/path/dataset --pipeline binary_masks
+python -m capbench dev partition-cap3d -- --dataset-path /abs/path/dataset
+python -m capbench dev openrcx -- --process-nodes nangate45 --sizes small
+python -m capbench dev rwcap -- --process-nodes nangate45 --sizes small
+python -m capbench dev window-metadata -- --help
 ```
 
 These tools remain available for dataset authoring and maintenance, but they are not the default user workflow.

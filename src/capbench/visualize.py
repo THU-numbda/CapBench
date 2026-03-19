@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Sequence
 
 from .datasets import resolve_dataset_path
-from .visualization import viewer_cap3d, viewer_density_maps, viewer_point_cloud
 
 
 def _strip_passthrough(extra_args: Sequence[str]) -> list[str]:
@@ -17,6 +16,8 @@ def _strip_passthrough(extra_args: Sequence[str]) -> list[str]:
 
 
 def visualize_density(dataset: str | Path, *, window_id: str, extra_args: Sequence[str] = ()) -> None:
+    from .visualization import viewer_density_maps
+
     dataset_root = resolve_dataset_path(dataset, artifacts=["density_maps"])
     density_map = dataset_root / "density_maps" / f"{window_id}.npz"
     if not density_map.exists():
@@ -31,6 +32,8 @@ def visualize_density(dataset: str | Path, *, window_id: str, extra_args: Sequen
 
 
 def visualize_point_cloud(dataset: str | Path, *, window_id: str, extra_args: Sequence[str] = ()) -> None:
+    from .visualization import viewer_point_cloud
+
     dataset_root = resolve_dataset_path(dataset, artifacts=["point_clouds", "cap3d"])
     point_cloud = dataset_root / "point_clouds" / f"{window_id}.npz"
     if not point_cloud.exists():
@@ -46,6 +49,8 @@ def visualize_point_cloud(dataset: str | Path, *, window_id: str, extra_args: Se
 
 
 def visualize_cap3d(dataset: str | Path, *, window_id: str, extra_args: Sequence[str] = ()) -> None:
+    from .visualization import viewer_cap3d
+
     dataset_root = resolve_dataset_path(dataset, artifacts=["cap3d"])
     cap3d_file = dataset_root / "cap3d" / f"{window_id}.cap3d"
     if not cap3d_file.exists():

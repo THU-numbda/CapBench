@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 from typing import Dict, Optional
 
-import yaml
 from capbench.paths import PACKAGE_ROOT, TECH_ROOT
 
 # Root dataset directories
