@@ -20,19 +20,23 @@ The following flows remain in the repository, but are considered developer-only 
 
 ## Quickstart After Clone
 
-1. Create a virtual environment and install CapBench:
+1. Install CapBench into the current Python environment:
+
+```bash
+python -m pip install -e ".[all]"
+```
+
+This works the same way in a conda environment, a standard Python virtual environment, or directly inside your container. Using `python -m pip` ensures the install targets the active interpreter.
+
+If you want an isolated virtual environment first:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[all]"
+python -m pip install -e ".[all]"
 ```
 
-If you are working inside the existing NGC container workflow, you can still use:
-
-```bash
-source scripts/setup_env.sh install
-```
+If you are already inside your PyTorch container, just run the same `python -m pip install -e ".[all]"` command there.
 
 2. Inspect the registered datasets:
 

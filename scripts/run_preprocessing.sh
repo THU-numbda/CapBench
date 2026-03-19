@@ -2,8 +2,7 @@
 # Process standard CapBench window buckets through the dataset pipeline.
 #
 # Usage:
-#   source scripts/setup_env.sh install   # first time only
-#   source scripts/setup_env.sh           # subsequent runs
+#   python -m pip install -e ".[all]"
 #   bash scripts/run_preprocessing.sh
 #
 # Overrides:
@@ -29,7 +28,7 @@ SUMMARY_TSV="${LOG_DIR}/summary.tsv"
 mkdir -p "$LOG_DIR"
 
 if ! command -v parallel &>/dev/null; then
-    echo "ERROR: GNU parallel is required. Install it with: source scripts/setup_env.sh install"
+    echo "ERROR: GNU parallel is required for this developer script. Install it separately and rerun."
     exit 1
 fi
 
