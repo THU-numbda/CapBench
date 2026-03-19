@@ -1,10 +1,10 @@
-# Dataset Overview
-This repository contains the generated windows accross Nangate45, ASAP7, and SKY130HD technology nodes, each split into `small`, `medium`, and `large` buckets. Additionally, this directory contains the compressed original assets from the `synth_designs`.
+# Dataset Workspace
+This directory is the default local workspace root for datasets materialized from the CapBench cache. Running `capbench datasets install <dataset> --materialize` will place symlinks or local dataset directories under this tree.
 
-## Data
-Every PDK bucket exposes consistent subdirectories (`gds`, `def`, `density_maps`, `binary-masks`, `point_clouds`, `cap3d`, `graphs`) to keep geometry, derived features, and metadata aligned per block. `density_maps` remains the legacy float-occupancy format used by the ResNet/PCT flow, while `binary-masks` is the ID-map format used by the newer U-Net flow.
+## Expected Structure
+Each dataset bucket exposes consistent subdirectories such as `gds`, `def`, `cap3d`, `density_maps`, `binary-masks`, `point_clouds`, and solver label directories so geometry, derived features, and metadata remain aligned per window.
 
-## Labels
-Labels live beside each block under `labels_rwcap`, `labels_raphael`, and, where available, `labels_openrcx`, reflecting capacitance ground-truth extracted by the respective field solvers.
+## Notes
+Versioned example data and historical datasets have been moved under `reference/` so this directory can remain focused on active workspaces and materialized cache content.
 
-> **Warning:** The full uncompressed datasets occupy dozens of gigabytes; ensure you have adequate local disk space before copying or repackaging them.
+> **Warning:** Full uncompressed datasets occupy dozens of gigabytes; ensure you have adequate local disk space before materializing or copying them.

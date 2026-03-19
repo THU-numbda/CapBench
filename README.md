@@ -15,6 +15,8 @@ The following flows remain in the repository, but are considered developer-only 
 - preprocessing pipeline authoring workflows
 - OpenRCX / RWCap maintenance helpers
 
+Reference-only material such as baseline projects, archived scripts, and upstream flow snapshots now lives under `reference/` and is not part of the installable package.
+
 > [!WARNING]
 > **Repository Status**: This repository is being mirrored by a different repository that is currently under review for a conference. Please **do not push any changes directly to the main branch**. Use feature branches or forks for development work.
 
@@ -85,6 +87,12 @@ capbench visualize density --dataset nangate45/small --window W0
 capbench visualize point-cloud --dataset nangate45/small --window W0
 capbench visualize cap3d --dataset nangate45/small --window W0
 ```
+
+## Repository Layout
+
+- `src/capbench/`: the only installable Python package
+- `datasets/`: local materialized datasets or symlink workspaces
+- `reference/`: non-supported historical baselines, archived scripts, and flow snapshots kept for provenance
 
 ## Cache Model
 
@@ -159,7 +167,7 @@ root = install_dataset("nangate45/small")
 dataset = load_binary_mask_window_dataset("nangate45/small", goal="self")
 ```
 
-The current top-level modules like `common`, `window_tools`, and `spef_tools` still exist for compatibility with the legacy codebase, but new code should prefer `capbench.*`.
+Legacy top-level modules such as `common`, `window_tools`, `spef_tools`, and `viewers` are no longer packaged. Supported code should import only `capbench.*`.
 
 ## Registered Data Sources
 
@@ -168,7 +176,7 @@ The built-in registry currently includes:
 - `nangate45/small`
   Uses the Zenodo archive as the canonical source.
 
-If you expand the Zenodo upload with more preprocessed artifacts, update `capbench/data/datasets.json` so the cached dataset metadata matches what is actually bundled.
+If you expand the Zenodo upload with more preprocessed artifacts, update `src/capbench/data/datasets.json` so the cached dataset metadata matches what is actually bundled.
 
 ## Notes On Scope
 
