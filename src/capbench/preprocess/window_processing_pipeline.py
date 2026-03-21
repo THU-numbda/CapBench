@@ -579,8 +579,10 @@ class WindowExtractor:
             if allowed_layers is not None:
                 # Find the layer name for this GDS layer
                 layer_name = None
-                for name, gds_num in layermap.items():
-                    if gds_num == info.layer:
+                info_dtype = getattr(info, "datatype", 0)
+                for name, gds_spec in layermap.items():
+                    gds_layer, gds_dtype = gds_spec
+                    if gds_layer == info.layer and gds_dtype == info_dtype:
                         layer_name = name
                         break
 
