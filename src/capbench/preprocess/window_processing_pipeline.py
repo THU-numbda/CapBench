@@ -1826,7 +1826,7 @@ class WindowExtractor:
         def_out = outputs['def']
         ran_layout = False
 
-        if not self._has_cap3d_outputs(outputs):
+        if not self._has_gds_outputs(outputs):
             # 1. Parse DEF for component analysis (cached per design)
             # KLayout optimization: Skip DEF parsing when using default net names
             if self.use_default_net_names:
