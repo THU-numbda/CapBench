@@ -113,8 +113,8 @@ class WindowExtractor:
             return _normalize_stage_name(stage) in self.pipeline_stages
         self.should_run_stage = should_run_stage
 
-        # Downstream-only runs (cnn/pct) can reuse existing CAP3D artifacts without raw layout files
-        self.requires_layout_inputs = self.should_run_stage('cap3d')
+        # Layout inputs are needed whenever we regenerate clipped GDS/DEF windows.
+        self.requires_layout_inputs = self.should_run_stage('gds') or self.should_run_stage('cap3d')
         if self.requires_layout_inputs:
             require_pya()
 
@@ -258,7 +258,7 @@ class WindowExtractor:
     def _determine_stage_activity(self) -> Dict[str, bool]:
         """Return a map of pipeline stages that should run this session."""
         return {
-            'gds': self.should_run_stage('cap3d'),
+            'gds': self.should_run_stage('gds') or self.should_run_stage('cap3d'),
             'cap3d': self.should_run_stage('cap3d'),
             'pct': self.should_run_stage('pct'),
             'cnn': self.should_run_stage('cnn'),
@@ -1810,8 +1810,10 @@ class WindowExtractor:
         outputs = window_entry.get('outputs') or self._build_output_paths(name)
         cap3d_path = outputs['cap3d']
 
+        needs_layout_extraction = self.should_run_stage('gds') or self.should_run_stage('cap3d')
+
         # For downstream-only runs, skip extraction and reuse existing per-window DEF/CAP3D artifacts.
-        if not self.should_run_stage('cap3d'):
+        if not needs_layout_extraction:
             self._run_downstream_conversions(window_entry, outputs['def'], cap3d_path)
             return
 
@@ -1968,39 +1970,40 @@ class WindowExtractor:
         else:
             self._record_stage_skipped('gds')
 
-        # Generate CAP3D file immediately for this window (required for CNN/PCT).
+        # Generate CAP3D only when explicitly requested.
         cap3d_exists = cap3d_path.exists()
 
-        if not cap3d_exists:
-            if not gds_out.exists() or not def_out.exists():
-                print(f"    Missing clipped GDS/DEF for CAP3D generation: {name}")
-            else:
-                try:
-                    from capbench.preprocess.cap3d_generation import DEF2Cap3D
+        if self.should_run_stage('cap3d'):
+            if not cap3d_exists:
+                if not gds_out.exists() or not def_out.exists():
+                    print(f"    Missing clipped GDS/DEF for CAP3D generation: {name}")
+                else:
+                    try:
+                        from capbench.preprocess.cap3d_generation import DEF2Cap3D
 
-                    layermap_path = layermap_file
-                    if layermap_path is None:
-                        raise RuntimeError(f"No layermap file found for window {name}")
-                    generator = DEF2Cap3D(
-                        gds_file=str(gds_out),
-                        def_file=str(def_out),
-                        stack_file=str(stack_file),
-                        layermap_file=str(layermap_path),
-                        output_file=str(cap3d_path),
-                        process_node=tech_node,
-                        lef_files=self._resolve_lef_files(stack_file, tech_node),
-                    )
-                    generator.run()
-                    if not cap3d_path.exists():
-                        print(f"    ✗ CAP3D file not found: {cap3d_path}")
-                    else:
-                        self._record_stage_generated('cap3d')
-                        cap3d_exists = True
-                except Exception as e:
-                    print(f"    CAP3D generation failed for {name}: {e}")
-                    print(traceback.format_exc(), end="")
-        else:
-            self._record_stage_skipped('cap3d')
+                        layermap_path = layermap_file
+                        if layermap_path is None:
+                            raise RuntimeError(f"No layermap file found for window {name}")
+                        generator = DEF2Cap3D(
+                            gds_file=str(gds_out),
+                            def_file=str(def_out),
+                            stack_file=str(stack_file),
+                            layermap_file=str(layermap_path),
+                            output_file=str(cap3d_path),
+                            process_node=tech_node,
+                            lef_files=self._resolve_lef_files(stack_file, tech_node),
+                        )
+                        generator.run()
+                        if not cap3d_path.exists():
+                            print(f"    ✗ CAP3D file not found: {cap3d_path}")
+                        else:
+                            self._record_stage_generated('cap3d')
+                            cap3d_exists = True
+                    except Exception as e:
+                        print(f"    CAP3D generation failed for {name}: {e}")
+                        print(traceback.format_exc(), end="")
+            else:
+                self._record_stage_skipped('cap3d')
 
         self._run_downstream_conversions(window_entry, def_out, cap3d_path)
 
@@ -2164,6 +2167,8 @@ Examples:
   python3 window_processing_pipeline.py --windows-file datasets/small/windows.yaml
 
   # Run only specific pipeline stages
+  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline gds
+  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline gds binary-masks
   python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline cap3d cnn
   python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline binary-masks
   python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline pct
@@ -2175,8 +2180,8 @@ Examples:
                        help='Multi-design YAML file with file paths and window coordinates')
     parser.add_argument('--dataset-path', type=str,
                        help='Dataset directory path for windows (default: directory containing the windows YAML)')
-    parser.add_argument('--pipeline', type=str, nargs='+', choices=['cap3d', 'cnn', 'binary-masks', 'binary_masks', 'pct'], default=['cap3d', 'cnn', 'binary-masks', 'pct'],
-                       help='Pipeline stages to run (default: all stages). Choose from: cap3d, cnn, binary-masks, pct')
+    parser.add_argument('--pipeline', type=str, nargs='+', choices=['gds', 'cap3d', 'cnn', 'binary-masks', 'binary_masks', 'pct'], default=['cap3d', 'cnn', 'binary-masks', 'pct'],
+                       help='Pipeline stages to run (default: all stages). Choose from: gds, cap3d, cnn, binary-masks, pct')
     parser.add_argument('--default-net-names', action='store_true',
                        help='Skip DEF→GDS net matching and assign sequential net names (faster).')
     
