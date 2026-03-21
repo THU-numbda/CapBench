@@ -13,6 +13,13 @@ from .paths import get_cache_dir
 from .visualize import visualize_cap3d, visualize_density, visualize_point_cloud
 
 
+_DATASET_SIZE_ORDER = {
+    "small": 0,
+    "medium": 1,
+    "large": 2,
+}
+
+
 def _artifact_mode(info: dict[str, object], artifact: str) -> str:
     labels: list[str] = []
     bundled = set(info["bundled_artifacts"])
@@ -75,6 +82,33 @@ def _print_dataset_status(info: dict[str, object]) -> None:
     console.print(f"[bold]Workspace:[/bold] {workspace}")
 
 
+def _print_dataset_list() -> None:
+    print(f"Cache root: {get_cache_dir()}")
+    grouped: dict[str, dict[str, object]] = {}
+    for info in list_datasets():
+        dataset_id = str(info["id"])
+        process_node = str(info["process_node"])
+        size = dataset_id.split("/", 1)[1] if "/" in dataset_id else dataset_id
+        group = grouped.setdefault(
+            process_node,
+            {
+                "process_node": process_node,
+                "version": info["version"],
+                "sizes": [],
+            },
+        )
+        group["sizes"].append(size)
+    for process_node in sorted(grouped):
+        group = grouped[process_node]
+        sizes = ", ".join(
+            sorted(
+                (str(size) for size in group["sizes"]),
+                key=lambda size: (_DATASET_SIZE_ORDER.get(size.lower(), 999), size),
+            )
+        )
+        print(f"- {process_node} (version={group['version']}, sizes={sizes})")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="capbench",
@@ -88,10 +122,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     datasets_subparsers.add_parser("list", help="List registered datasets.")
 
-    datasets_info = datasets_subparsers.add_parser("info", help="Show metadata and cache status for one dataset.")
+    datasets_info = datasets_subparsers.add_parser("info", help="Show metadata and cache status for one exact dataset id.")
     datasets_info.add_argument("dataset")
 
-    datasets_ensure = datasets_subparsers.add_parser("ensure", help="Download a dataset into the shared cache.")
+    datasets_ensure = datasets_subparsers.add_parser("ensure", help="Download one exact dataset id or an entire PDK into the shared cache.")
     datasets_ensure.add_argument("dataset")
     datasets_ensure.add_argument("--artifact", nargs="*", default=(), help="Required artifacts to verify or generate.")
     datasets_ensure.add_argument("--source", default=None, help="Override the configured dataset source name.")
@@ -99,14 +133,14 @@ def _build_parser() -> argparse.ArgumentParser:
     datasets_install = datasets_subparsers.add_parser(
         "install",
         aliases=["prepare"],
-        help="Download a dataset and generate all configured cache artifacts in one step.",
+        help="Download one exact dataset id or an entire PDK and generate all configured cache artifacts in one step.",
     )
     datasets_install.add_argument("dataset")
     datasets_install.add_argument("--source", default=None, help="Override the configured dataset source name.")
 
     datasets_preprocess = datasets_subparsers.add_parser(
         "preprocess",
-        help="Generate missing cache artifacts such as density maps, binary masks, or point clouds.",
+        help="Generate missing cache artifacts for one exact dataset id or an entire PDK.",
     )
     datasets_preprocess.add_argument("dataset")
     datasets_preprocess.add_argument("--artifact", nargs="+", required=True, help="Artifacts to generate.")
@@ -145,9 +179,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "datasets":
         if args.datasets_command == "list":
-            print(f"Cache root: {get_cache_dir()}")
-            for info in list_datasets():
-                print(f"- {info['id']} (version={info['version']}, process_node={info['process_node']})")
+            _print_dataset_list()
             return 0
         if args.datasets_command == "info":
             print(json.dumps(get_dataset_info(args.dataset), indent=2, sort_keys=True))

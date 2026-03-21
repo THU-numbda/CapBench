@@ -39,10 +39,10 @@ python -m capbench datasets list
 3. Install a dataset in one step:
 
 ```bash
-python -m capbench datasets install nangate45/small
+python -m capbench datasets install nangate45
 ```
 
-This downloads the dataset into the shared cache, cleans partial preprocessing leftovers, and generates all configured derivable artifacts up front.
+This downloads the whole PDK archive into the shared cache, cleans partial preprocessing leftovers, and generates all configured derivable artifacts up front for each available split (`small`, `medium`, `large`).
 
 4. Open a visualization:
 
@@ -82,14 +82,14 @@ The cache is the source of truth. CapBench now operates directly on cached datas
 ```bash
 python -m capbench datasets list
 python -m capbench datasets info nangate45/small
-python -m capbench datasets install nangate45/small
-python -m capbench datasets ensure nangate45/small --artifact density_maps binary-masks
-python -m capbench datasets preprocess nangate45/small --artifact point_clouds
+python -m capbench datasets install nangate45
+python -m capbench datasets ensure nangate45
+python -m capbench datasets preprocess nangate45 --artifact point_clouds
 ```
 
-`install` is the recommended one-shot setup command. It downloads the dataset into the shared cache and generates all configured derivable artifacts up front.
+`install` is the recommended one-shot setup command. It downloads the PDK archive into the shared cache and generates all configured derivable artifacts up front for every registered split of that PDK.
 
-Loaders and visualization commands no longer generate or download artifacts implicitly. Run `python -m capbench datasets install <dataset>` first, then use the cached dataset normally.
+Loaders and visualization commands no longer generate or download artifacts implicitly. Run `python -m capbench datasets install <pdk>` first, then use exact split ids such as `nangate45/small` with the cached dataset normally.
 
 `ensure` and `preprocess` remain available for incremental or developer workflows when you only want part of the dataset state.
 
@@ -124,7 +124,7 @@ The supported public namespace is `capbench.*`.
 from capbench.datasets import install_dataset, resolve_dataset_path
 from capbench.dataloaders import load_density_window_dataset, load_binary_mask_window_dataset
 
-root = install_dataset("nangate45/small")
+root = install_dataset("nangate45")
 dataset = load_binary_mask_window_dataset("nangate45/small", goal="self")
 ```
 
@@ -134,8 +134,11 @@ Legacy top-level modules such as `common`, `window_tools`, `spef_tools`, and `vi
 
 The built-in registry currently includes:
 
-- `nangate45/small`
-  Uses the Zenodo archive as the canonical source.
+- `nangate45`
+- `sky130hd`
+- `asap7`
+
+Each PDK archive currently exposes the `small`, `medium`, and `large` dataset splits.
 
 If you expand the Zenodo upload with more preprocessed artifacts, update `src/capbench/data/datasets.json` so the cached dataset metadata matches what is actually bundled.
 
