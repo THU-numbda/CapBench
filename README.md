@@ -42,7 +42,7 @@ python -m capbench datasets list
 python -m capbench datasets install nangate45
 ```
 
-This downloads the whole PDK archive into the shared cache, cleans partial preprocessing leftovers, and generates all configured derivable artifacts up front for each available split (`small`, `medium`, `large`).
+This downloads the whole PDK archive into the shared cache, cleans partial preprocessing leftovers, and generates all configured generated artifacts up front for each available split (`small`, `medium`, `large`).
 
 4. Open a visualization:
 
@@ -87,7 +87,7 @@ python -m capbench datasets ensure nangate45
 python -m capbench datasets preprocess nangate45 --artifact point_clouds
 ```
 
-`install` is the recommended one-shot setup command. It downloads the PDK archive into the shared cache and generates all configured derivable artifacts up front for every registered split of that PDK.
+`install` is the recommended one-shot setup command. It downloads the PDK archive into the shared cache and generates all configured stage-backed artifacts up front for every registered split of that PDK.
 
 Loaders and visualization commands no longer generate or download artifacts implicitly. Run `python -m capbench datasets install <pdk>` first, then use exact split ids such as `nangate45/small` with the cached dataset normally.
 

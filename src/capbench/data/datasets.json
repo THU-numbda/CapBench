@@ -5,22 +5,11 @@
       "version": "2026-03-19",
       "description": "Small Nangate45 CapBench dataset with cached downloads and optional preprocessed artifacts.",
       "process_node": "nangate45",
-      "path_parts": ["nangate45", "small"],
-      "windows_file": "windows.yaml",
-      "bundled_artifacts": [
-        "cap3d",
-        "def",
-        "gds",
-        "windows.yaml",
-        "density_maps",
-        "binary-masks",
-        "labels_rwcap"
+      "path_parts": [
+        "nangate45",
+        "small"
       ],
-      "derivable_artifacts": {
-        "density_maps": "cnn",
-        "binary-masks": "binary-masks",
-        "point_clouds": "pct"
-      },
+      "windows_file": "windows.yaml",
       "sources": [
         {
           "name": "tencent-cos",
@@ -28,29 +17,28 @@
           "filename": "nangate45.zip",
           "preferred": true
         }
-      ]
+      ],
+      "artifacts": {
+        "cap3d": null,
+        "def": null,
+        "gds": null,
+        "windows.yaml": null,
+        "density_maps": "cnn",
+        "binary-masks": "binary-masks",
+        "labels_rwcap": null,
+        "point_clouds": "pct"
+      }
     },
     {
       "id": "nangate45/medium",
       "version": "2026-03-19",
       "description": "Medium Nangate45 CapBench dataset with cached downloads and optional preprocessed artifacts.",
       "process_node": "nangate45",
-      "path_parts": ["nangate45", "medium"],
-      "windows_file": "windows.yaml",
-      "bundled_artifacts": [
-        "cap3d",
-        "def",
-        "gds",
-        "windows.yaml",
-        "density_maps",
-        "binary-masks",
-        "labels_rwcap"
+      "path_parts": [
+        "nangate45",
+        "medium"
       ],
-      "derivable_artifacts": {
-        "density_maps": "cnn",
-        "binary-masks": "binary-masks",
-        "point_clouds": "pct"
-      },
+      "windows_file": "windows.yaml",
       "sources": [
         {
           "name": "tencent-cos",
@@ -58,29 +46,28 @@
           "filename": "nangate45.zip",
           "preferred": true
         }
-      ]
+      ],
+      "artifacts": {
+        "cap3d": null,
+        "def": null,
+        "gds": null,
+        "windows.yaml": null,
+        "density_maps": "cnn",
+        "binary-masks": "binary-masks",
+        "labels_rwcap": null,
+        "point_clouds": "pct"
+      }
     },
     {
       "id": "nangate45/large",
       "version": "2026-03-19",
       "description": "Large Nangate45 CapBench dataset with cached downloads and optional preprocessed artifacts.",
       "process_node": "nangate45",
-      "path_parts": ["nangate45", "large"],
-      "windows_file": "windows.yaml",
-      "bundled_artifacts": [
-        "cap3d",
-        "def",
-        "gds",
-        "windows.yaml",
-        "density_maps",
-        "binary-masks",
-        "labels_rwcap"
+      "path_parts": [
+        "nangate45",
+        "large"
       ],
-      "derivable_artifacts": {
-        "density_maps": "cnn",
-        "binary-masks": "binary-masks",
-        "point_clouds": "pct"
-      },
+      "windows_file": "windows.yaml",
       "sources": [
         {
           "name": "tencent-cos",
@@ -88,28 +75,28 @@
           "filename": "nangate45.zip",
           "preferred": true
         }
-      ]
+      ],
+      "artifacts": {
+        "cap3d": null,
+        "def": null,
+        "gds": null,
+        "windows.yaml": null,
+        "density_maps": "cnn",
+        "binary-masks": "binary-masks",
+        "labels_rwcap": null,
+        "point_clouds": "pct"
+      }
     },
     {
       "id": "sky130hd/small",
       "version": "2026-03-21",
       "description": "Small Sky130HD CapBench dataset with cached downloads and optional preprocessed artifacts.",
       "process_node": "sky130hd",
-      "path_parts": ["sky130hd", "small"],
-      "windows_file": "windows.yaml",
-      "bundled_artifacts": [
-        "cap3d",
-        "def",
-        "gds",
-        "windows.yaml",
-        "density_maps",
-        "labels_rwcap"
+      "path_parts": [
+        "sky130hd",
+        "small"
       ],
-      "derivable_artifacts": {
-        "density_maps": "cnn",
-        "binary-masks": "binary-masks",
-        "point_clouds": "pct"
-      },
+      "windows_file": "windows.yaml",
       "sources": [
         {
           "name": "tencent-cos",
@@ -117,28 +104,28 @@
           "filename": "sky130hd.zip",
           "preferred": true
         }
-      ]
+      ],
+      "artifacts": {
+        "cap3d": null,
+        "def": null,
+        "gds": null,
+        "windows.yaml": null,
+        "density_maps": "cnn",
+        "labels_rwcap": null,
+        "binary-masks": "binary-masks",
+        "point_clouds": "pct"
+      }
     },
     {
       "id": "sky130hd/medium",
       "version": "2026-03-21",
       "description": "Medium Sky130HD CapBench dataset with cached downloads and optional preprocessed artifacts.",
       "process_node": "sky130hd",
-      "path_parts": ["sky130hd", "medium"],
-      "windows_file": "windows.yaml",
-      "bundled_artifacts": [
-        "cap3d",
-        "def",
-        "gds",
-        "windows.yaml",
-        "density_maps",
-        "labels_rwcap"
+      "path_parts": [
+        "sky130hd",
+        "medium"
       ],
-      "derivable_artifacts": {
-        "density_maps": "cnn",
-        "binary-masks": "binary-masks",
-        "point_clouds": "pct"
-      },
+      "windows_file": "windows.yaml",
       "sources": [
         {
           "name": "tencent-cos",
@@ -146,28 +133,28 @@
           "filename": "sky130hd.zip",
           "preferred": true
         }
-      ]
+      ],
+      "artifacts": {
+        "cap3d": null,
+        "def": null,
+        "gds": null,
+        "windows.yaml": null,
+        "density_maps": "cnn",
+        "labels_rwcap": null,
+        "binary-masks": "binary-masks",
+        "point_clouds": "pct"
+      }
     },
     {
       "id": "sky130hd/large",
       "version": "2026-03-21",
       "description": "Large Sky130HD CapBench dataset with cached downloads and optional preprocessed artifacts.",
       "process_node": "sky130hd",
-      "path_parts": ["sky130hd", "large"],
-      "windows_file": "windows.yaml",
-      "bundled_artifacts": [
-        "cap3d",
-        "def",
-        "gds",
-        "windows.yaml",
-        "density_maps",
-        "labels_rwcap"
+      "path_parts": [
+        "sky130hd",
+        "large"
       ],
-      "derivable_artifacts": {
-        "density_maps": "cnn",
-        "binary-masks": "binary-masks",
-        "point_clouds": "pct"
-      },
+      "windows_file": "windows.yaml",
       "sources": [
         {
           "name": "tencent-cos",
@@ -175,28 +162,28 @@
           "filename": "sky130hd.zip",
           "preferred": true
         }
-      ]
+      ],
+      "artifacts": {
+        "cap3d": null,
+        "def": null,
+        "gds": null,
+        "windows.yaml": null,
+        "density_maps": "cnn",
+        "labels_rwcap": null,
+        "binary-masks": "binary-masks",
+        "point_clouds": "pct"
+      }
     },
     {
       "id": "asap7/small",
       "version": "2026-03-21",
       "description": "Small ASAP7 CapBench dataset with cached downloads and optional preprocessed artifacts.",
       "process_node": "asap7",
-      "path_parts": ["asap7", "small"],
-      "windows_file": "windows.yaml",
-      "bundled_artifacts": [
-        "cap3d",
-        "def",
-        "gds",
-        "windows.yaml",
-        "density_maps",
-        "labels_rwcap"
+      "path_parts": [
+        "asap7",
+        "small"
       ],
-      "derivable_artifacts": {
-        "density_maps": "cnn",
-        "binary-masks": "binary-masks",
-        "point_clouds": "pct"
-      },
+      "windows_file": "windows.yaml",
       "sources": [
         {
           "name": "tencent-cos",
@@ -204,28 +191,28 @@
           "filename": "asap7.zip",
           "preferred": true
         }
-      ]
+      ],
+      "artifacts": {
+        "cap3d": null,
+        "def": null,
+        "gds": null,
+        "windows.yaml": null,
+        "density_maps": "cnn",
+        "labels_rwcap": null,
+        "binary-masks": "binary-masks",
+        "point_clouds": "pct"
+      }
     },
     {
       "id": "asap7/medium",
       "version": "2026-03-21",
       "description": "Medium ASAP7 CapBench dataset with cached downloads and optional preprocessed artifacts.",
       "process_node": "asap7",
-      "path_parts": ["asap7", "medium"],
-      "windows_file": "windows.yaml",
-      "bundled_artifacts": [
-        "cap3d",
-        "def",
-        "gds",
-        "windows.yaml",
-        "density_maps",
-        "labels_rwcap"
+      "path_parts": [
+        "asap7",
+        "medium"
       ],
-      "derivable_artifacts": {
-        "density_maps": "cnn",
-        "binary-masks": "binary-masks",
-        "point_clouds": "pct"
-      },
+      "windows_file": "windows.yaml",
       "sources": [
         {
           "name": "tencent-cos",
@@ -233,28 +220,28 @@
           "filename": "asap7.zip",
           "preferred": true
         }
-      ]
+      ],
+      "artifacts": {
+        "cap3d": null,
+        "def": null,
+        "gds": null,
+        "windows.yaml": null,
+        "density_maps": "cnn",
+        "labels_rwcap": null,
+        "binary-masks": "binary-masks",
+        "point_clouds": "pct"
+      }
     },
     {
       "id": "asap7/large",
       "version": "2026-03-21",
       "description": "Large ASAP7 CapBench dataset with cached downloads and optional preprocessed artifacts.",
       "process_node": "asap7",
-      "path_parts": ["asap7", "large"],
-      "windows_file": "windows.yaml",
-      "bundled_artifacts": [
-        "cap3d",
-        "def",
-        "gds",
-        "windows.yaml",
-        "density_maps",
-        "labels_rwcap"
+      "path_parts": [
+        "asap7",
+        "large"
       ],
-      "derivable_artifacts": {
-        "density_maps": "cnn",
-        "binary-masks": "binary-masks",
-        "point_clouds": "pct"
-      },
+      "windows_file": "windows.yaml",
       "sources": [
         {
           "name": "tencent-cos",
@@ -262,7 +249,17 @@
           "filename": "asap7.zip",
           "preferred": true
         }
-      ]
+      ],
+      "artifacts": {
+        "cap3d": null,
+        "def": null,
+        "gds": null,
+        "windows.yaml": null,
+        "density_maps": "cnn",
+        "labels_rwcap": null,
+        "binary-masks": "binary-masks",
+        "point_clouds": "pct"
+      }
     }
   ]
 }

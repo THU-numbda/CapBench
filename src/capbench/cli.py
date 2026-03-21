@@ -20,26 +20,13 @@ _DATASET_SIZE_ORDER = {
 }
 
 
-def _artifact_mode(info: dict[str, object], artifact: str) -> str:
-    labels: list[str] = []
-    bundled = set(info["bundled_artifacts"])
-    derivable = dict(info["derivable_artifacts"])
-    if artifact in bundled:
-        labels.append("bundled")
-    stage = derivable.get(artifact)
-    if stage is not None:
-        labels.append(f"stage:{stage}")
-    return ", ".join(labels) or "-"
-
-
-def _dataset_status_rows(info: dict[str, object]) -> list[tuple[str, str, str]]:
-    artifacts = sorted(set(info["bundled_artifacts"]) | set(info["derivable_artifacts"]))
+def _dataset_status_rows(info: dict[str, object]) -> list[tuple[str, str]]:
+    artifacts = sorted(dict(info["artifacts"]))
     status = dict(info["artifact_status"])
     return [
         (
             artifact,
             "ready" if status.get(artifact) else "missing",
-            _artifact_mode(info, artifact),
         )
         for artifact in artifacts
     ]
@@ -57,7 +44,7 @@ def _print_dataset_status(info: dict[str, object]) -> None:
         print(title)
         print(f"  Cache root: {info['cache_root']}")
         print(f"  Workspace:  {workspace}")
-        headers = ("Artifact", "Status", "Provision")
+        headers = ("Artifact", "Status")
         widths = [len(header) for header in headers]
         for row in rows:
             for index, value in enumerate(row):
@@ -74,7 +61,6 @@ def _print_dataset_status(info: dict[str, object]) -> None:
     table = Table(title=title)
     table.add_column("Artifact")
     table.add_column("Status")
-    table.add_column("Provision")
     for row in rows:
         table.add_row(*row)
     console.print(table)

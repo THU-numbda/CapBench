@@ -26,8 +26,7 @@ class DatasetEntry:
     process_node: str
     path_parts: tuple[str, ...]
     windows_file: str
-    bundled_artifacts: tuple[str, ...]
-    derivable_artifacts: Dict[str, str]
+    artifacts: Dict[str, str | None]
     sources: tuple[DatasetSource, ...]
 
     @property
@@ -65,8 +64,7 @@ def load_registry() -> Dict[str, DatasetEntry]:
             process_node=raw_entry["process_node"],
             path_parts=tuple(raw_entry["path_parts"]),
             windows_file=raw_entry.get("windows_file", "windows.yaml"),
-            bundled_artifacts=tuple(raw_entry.get("bundled_artifacts", [])),
-            derivable_artifacts=dict(raw_entry.get("derivable_artifacts", {})),
+            artifacts={str(name): (None if stage is None else str(stage)) for name, stage in dict(raw_entry.get("artifacts", {})).items()},
             sources=sources,
         )
         entries[entry.dataset_id] = entry
@@ -87,4 +85,3 @@ def get_dataset_entry(dataset_id: str) -> DatasetEntry:
 
 def iter_dataset_ids() -> Iterable[str]:
     return load_registry().keys()
-

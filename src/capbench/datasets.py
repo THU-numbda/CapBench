@@ -26,7 +26,7 @@ from .cache import (
 from .registry import DatasetEntry, DatasetSource, get_dataset_entry, list_dataset_entries
 
 
-DERIVABLE_ARTIFACTS = {
+DEFAULT_ARTIFACT_STAGES = {
     "binary-masks": "binary-masks",
     "density_maps": "cnn",
     "point_clouds": "pct",
@@ -258,7 +258,7 @@ def _update_state(entry: DatasetEntry, selected_source: DatasetSource, workspace
         "workspace_root": str(workspace_root),
         "artifacts": {
             artifact: artifact_exists(workspace_root, artifact)
-            for artifact in sorted(set(entry.bundled_artifacts) | set(entry.derivable_artifacts))
+            for artifact in sorted(entry.artifacts)
         },
     }
     write_dataset_state(list(entry.path_parts), payload)
@@ -328,10 +328,12 @@ def _ensure_artifacts(entry: DatasetEntry, dataset_root: Path, artifacts: Sequen
         if artifact_exists(dataset_root, artifact):
             continue
 
-        stage = entry.derivable_artifacts.get(artifact, DERIVABLE_ARTIFACTS.get(artifact))
+        stage = entry.artifacts.get(artifact)
+        if stage is None:
+            stage = DEFAULT_ARTIFACT_STAGES.get(artifact)
         if stage is None:
             raise RuntimeError(
-                f"Artifact '{artifact}' is missing for {entry.dataset_id} and is not configured as derivable. "
+                f"Artifact '{artifact}' is missing for {entry.dataset_id} and is not configured with a preprocessing stage. "
                 f"Dataset root: {dataset_root}"
             )
 
@@ -342,10 +344,14 @@ def _ensure_artifacts(entry: DatasetEntry, dataset_root: Path, artifacts: Sequen
 
 
 def _default_prepare_artifacts(entry: DatasetEntry) -> tuple[str, ...]:
-    configured = {normalize_artifact_name(name) for name in entry.derivable_artifacts}
+    configured = {
+        normalize_artifact_name(name)
+        for name, stage in entry.artifacts.items()
+        if stage is not None
+    }
     if configured:
         return tuple(sorted(configured))
-    return tuple(sorted(DERIVABLE_ARTIFACTS))
+    return tuple(sorted(DEFAULT_ARTIFACT_STAGES))
 
 
 def _remove_path(path: Path) -> None:
@@ -488,15 +494,14 @@ def get_dataset_info(dataset: str) -> Dict[str, Any]:
     workspace_root = _installed_workspace_root(entry)
     artifact_status = {
         artifact: (artifact_exists(workspace_root, artifact) if workspace_root is not None else False)
-        for artifact in sorted(set(entry.bundled_artifacts) | set(entry.derivable_artifacts))
+        for artifact in sorted(entry.artifacts)
     }
     return {
         "id": entry.dataset_id,
         "version": entry.version,
         "description": entry.description,
         "process_node": entry.process_node,
-        "bundled_artifacts": list(entry.bundled_artifacts),
-        "derivable_artifacts": dict(entry.derivable_artifacts),
+        "artifacts": dict(entry.artifacts),
         "sources": [source.name for source in entry.sources],
         "cache_root": str(cache_base),
         "workspace_root": (str(workspace_root) if workspace_root is not None else None),
