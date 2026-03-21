@@ -29,6 +29,64 @@
           "preferred": true
         }
       ]
+    },
+    {
+      "id": "sky130hd/small",
+      "version": "2026-03-21",
+      "description": "Small Sky130HD CapBench dataset with cached downloads and optional preprocessed artifacts.",
+      "process_node": "sky130hd",
+      "path_parts": ["sky130hd", "small"],
+      "windows_file": "windows.yaml",
+      "bundled_artifacts": [
+        "cap3d",
+        "def",
+        "gds",
+        "windows.yaml",
+        "density_maps",
+        "labels_rwcap"
+      ],
+      "derivable_artifacts": {
+        "density_maps": "cnn",
+        "binary-masks": "binary-masks",
+        "point_clouds": "pct"
+      },
+      "sources": [
+        {
+          "name": "tencent-cos",
+          "url": "https://capbench-1412565472.cos.ap-singapore.myqcloud.com/sky130hd.zip",
+          "filename": "sky130hd.zip",
+          "preferred": true
+        }
+      ]
+    },
+    {
+      "id": "asap7/small",
+      "version": "2026-03-21",
+      "description": "Small ASAP7 CapBench dataset with cached downloads and optional preprocessed artifacts.",
+      "process_node": "asap7",
+      "path_parts": ["asap7", "small"],
+      "windows_file": "windows.yaml",
+      "bundled_artifacts": [
+        "cap3d",
+        "def",
+        "gds",
+        "windows.yaml",
+        "density_maps",
+        "labels_rwcap"
+      ],
+      "derivable_artifacts": {
+        "density_maps": "cnn",
+        "binary-masks": "binary-masks",
+        "point_clouds": "pct"
+      },
+      "sources": [
+        {
+          "name": "tencent-cos",
+          "url": "https://capbench-1412565472.cos.ap-singapore.myqcloud.com/asap7.zip",
+          "filename": "asap7.zip",
+          "preferred": true
+        }
+      ]
     }
   ]
 }

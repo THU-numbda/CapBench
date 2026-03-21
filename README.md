@@ -30,30 +30,6 @@ python -m pip install -e ".[all]"
 
 This works the same way in a conda environment, a standard Python virtual environment, or directly inside your container. Using `python -m pip` ensures the install targets the active interpreter.
 
-If you want an isolated virtual environment first:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e ".[all]"
-```
-
-If you are already inside your PyTorch container, just run the same `python -m pip install -e ".[all]"` command there.
-
-If you are entering the container from a host shell that has Conda active, use a clean shell so host Python does not override the container Python:
-
-```bash
-singularity exec --cleanenv --nv /path/to/pytorch_26.02-py3.sif /bin/bash --noprofile --norc -i
-```
-
-This uses `--cleanenv` plus `bash --noprofile --norc`, which prevents inherited host `PATH` entries such as `~/miniconda3/bin` from taking precedence inside the container.
-
-If you want the host shell itself to stop auto-entering Conda `base`, run this once on the host:
-
-```bash
-conda config --set auto_activate_base false
-```
-
 2. Inspect the registered datasets:
 
 ```bash
