@@ -18,7 +18,7 @@
       ],
       "derivable_artifacts": {
         "density_maps": "cnn",
-        "binary-masks": "binary_masks",
+        "binary-masks": "binary-masks",
         "point_clouds": "pct"
       },
       "sources": [

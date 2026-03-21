@@ -17,6 +17,8 @@ from .cache import (
     artifact_exists,
     cache_download_dir,
     dataset_cache_base,
+    filesystem_created_at,
+    legacy_dataset_cache_base,
     normalize_artifact_name,
     read_dataset_state,
     write_dataset_state,
@@ -25,7 +27,7 @@ from .registry import DatasetEntry, DatasetSource, get_dataset_entry, list_datas
 
 
 DERIVABLE_ARTIFACTS = {
-    "binary-masks": "binary_masks",
+    "binary-masks": "binary-masks",
     "density_maps": "cnn",
     "point_clouds": "pct",
 }
@@ -94,6 +96,31 @@ def _extract_archive(entry: DatasetEntry, source: DatasetSource, archive_path: P
     return extract_root
 
 
+def _migrate_legacy_cache_layout(entry: DatasetEntry, *, create: bool = False) -> Path:
+    cache_base = dataset_cache_base(list(entry.path_parts), entry.version, create=create)
+    legacy_base = legacy_dataset_cache_base(list(entry.path_parts), entry.version)
+    if not legacy_base.exists() or legacy_base == cache_base:
+        return cache_base
+
+    has_current_layout = any((cache_base / name).exists() for name in ("sources", "workspace"))
+    if not has_current_layout:
+        for child in legacy_base.iterdir():
+            if child.name == "workspace":
+                continue
+            target = cache_base / child.name
+            if target.exists():
+                continue
+            child.rename(target)
+        legacy_workspace = legacy_base / "workspace"
+        if legacy_workspace.exists() or legacy_workspace.is_symlink():
+            legacy_workspace.unlink()
+    try:
+        legacy_base.rmdir()
+    except OSError:
+        pass
+    return cache_base
+
+
 def _locate_dataset_root(extract_root: Path, entry: DatasetEntry) -> Path:
     expected = extract_root.joinpath(*entry.path_parts)
     if expected.exists():
@@ -120,16 +147,16 @@ def _ensure_workspace_link(entry: DatasetEntry, source_root: Path) -> Path:
     workspace_path = cache_base / "workspace"
     if workspace_path.is_symlink():
         if workspace_path.resolve() == source_root.resolve():
-            return workspace_path.resolve()
+            return workspace_path
         workspace_path.unlink()
     elif workspace_path.exists():
         if workspace_path.resolve() == source_root.resolve():
-            return workspace_path.resolve()
+            return workspace_path
         raise RuntimeError(f"Workspace path already exists and is not a managed symlink: {workspace_path}")
 
     workspace_path.parent.mkdir(parents=True, exist_ok=True)
     workspace_path.symlink_to(source_root, target_is_directory=True)
-    return workspace_path.resolve()
+    return workspace_path
 
 
 def _update_state(entry: DatasetEntry, selected_source: DatasetSource, workspace_root: Path) -> None:
@@ -147,17 +174,17 @@ def _update_state(entry: DatasetEntry, selected_source: DatasetSource, workspace
 
 
 def _installed_workspace_root(entry: DatasetEntry) -> Path | None:
-    cache_base = dataset_cache_base(list(entry.path_parts), entry.version, create=False)
+    cache_base = _migrate_legacy_cache_layout(entry, create=False)
     workspace_link = cache_base / "workspace"
     if not workspace_link.exists():
         return None
-    workspace_root = workspace_link.resolve()
-    if not workspace_root.exists():
+    if not workspace_link.resolve().exists():
         return None
-    return workspace_root
+    return workspace_link
 
 
 def _ensure_registered_dataset(entry: DatasetEntry, *, source_name: str | None = None) -> Path:
+    _migrate_legacy_cache_layout(entry, create=True)
     source = _select_source(entry, source_name)
     archive_path = _download_archive(source)
     extract_root = _extract_archive(entry, source, archive_path)
@@ -334,7 +361,7 @@ def resolve_dataset_path(
 
 def get_dataset_info(dataset: str) -> Dict[str, Any]:
     entry = get_dataset_entry(dataset)
-    cache_base = dataset_cache_base(list(entry.path_parts), entry.version, create=False)
+    cache_base = _migrate_legacy_cache_layout(entry, create=False)
     state = read_dataset_state(list(entry.path_parts))
     workspace_root = _installed_workspace_root(entry)
     artifact_status = {
@@ -351,6 +378,7 @@ def get_dataset_info(dataset: str) -> Dict[str, Any]:
         "sources": [source.name for source in entry.sources],
         "cache_root": str(cache_base),
         "workspace_root": (str(workspace_root) if workspace_root is not None else None),
+        "installed_at": filesystem_created_at(cache_base),
         "artifact_status": artifact_status,
         "state": state,
     }

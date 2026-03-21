@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
@@ -88,10 +89,14 @@ def cache_registry_dir(*, create: bool = False) -> Path:
 
 
 def dataset_cache_base(path_parts: list[str] | tuple[str, ...], version: str, *, create: bool = False) -> Path:
-    path = cache_datasets_dir(create=create).joinpath(*path_parts, version)
+    path = cache_datasets_dir(create=create).joinpath(*path_parts)
     if create:
         path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def legacy_dataset_cache_base(path_parts: list[str] | tuple[str, ...], version: str) -> Path:
+    return cache_datasets_dir(create=False).joinpath(*path_parts, version)
 
 
 def dataset_state_path(path_parts: list[str] | tuple[str, ...], *, create: bool = False) -> Path:
@@ -109,3 +114,14 @@ def read_dataset_state(path_parts: list[str] | tuple[str, ...]) -> Dict[str, Any
 def write_dataset_state(path_parts: list[str] | tuple[str, ...], payload: Dict[str, Any]) -> None:
     path = dataset_state_path(path_parts, create=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def filesystem_created_at(path: Path) -> str | None:
+    path = Path(path)
+    if not path.exists():
+        return None
+    stat = path.stat()
+    timestamp = getattr(stat, "st_birthtime", None)
+    if timestamp is None:
+        timestamp = stat.st_ctime
+    return datetime.fromtimestamp(timestamp).astimezone().isoformat(timespec="seconds")

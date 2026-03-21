@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 CAP3D Window Extraction Tool (KLayout + DEF filtering)
 
@@ -45,10 +46,23 @@ STAGE_LABELS = {
     'cap3d': 'CAP3D',
     'pct': 'PCT point clouds',
     'cnn': 'CNN density maps',
-    'binary_masks': 'U-Net binary masks',
+    'binary-masks': 'U-Net binary masks',
 }
 
-STAGE_PRINT_ORDER = ['gds', 'cap3d', 'cnn', 'binary_masks', 'pct']
+STAGE_PRINT_ORDER = ['gds', 'cap3d', 'cnn', 'binary-masks', 'pct']
+
+STAGE_ALIASES = {
+    'gds': 'gds',
+    'cap3d': 'cap3d',
+    'pct': 'pct',
+    'cnn': 'cnn',
+    'binary_masks': 'binary-masks',
+    'binary-masks': 'binary-masks',
+}
+
+STAGE_OUTPUT_KEYS = {
+    'binary-masks': 'binary_masks',
+}
 
 DEFAULT_LAYER_LIMITS = {
     'nangate45': {
@@ -65,6 +79,10 @@ DEFAULT_LAYER_LIMITS = {
 
 def _normalize_layer_key(value: Optional[str]) -> str:
     return ''.join(ch for ch in str(value).lower() if ch.isalnum()) if value else ''
+
+
+def _normalize_stage_name(stage: str) -> str:
+    return STAGE_ALIASES.get(str(stage), str(stage))
 
 class WindowExtractor:
     """Extract windows from GDS+DEF designs using KLayout + DEF filtering"""
@@ -84,14 +102,15 @@ class WindowExtractor:
         self.process_node = process_node
         self.tech_stack_file = tech_stack_file
         self.layermap_file = Path(layermap_file) if layermap_file else None
-        self.pipeline_stages = pipeline_stages or ['cap3d', 'cnn', 'binary_masks', 'pct']
+        raw_pipeline_stages = pipeline_stages or ['cap3d', 'cnn', 'binary-masks', 'pct']
+        self.pipeline_stages = [_normalize_stage_name(stage) for stage in raw_pipeline_stages]
         self.rebase_origin = True
         self.group_with_l2n = True
         self.use_default_net_names = use_default_net_names
 
         # Helper method to check if a pipeline stage should run
         def should_run_stage(stage: str) -> bool:
-            return stage in self.pipeline_stages
+            return _normalize_stage_name(stage) in self.pipeline_stages
         self.should_run_stage = should_run_stage
 
         # Downstream-only runs (cnn/pct) can reuse existing CAP3D artifacts without raw layout files
@@ -243,7 +262,7 @@ class WindowExtractor:
             'cap3d': self.should_run_stage('cap3d'),
             'pct': self.should_run_stage('pct'),
             'cnn': self.should_run_stage('cnn'),
-            'binary_masks': self.should_run_stage('binary_masks'),
+            'binary-masks': self.should_run_stage('binary-masks'),
         }
 
     def _initialize_stage_counters(self, total_windows: int) -> Dict[str, Dict[str, int]]:
@@ -275,17 +294,20 @@ class WindowExtractor:
                 self.stage_counters['pct']['existing_pre'] += 1
             if 'cnn' in self.stage_counters and outputs['cnn'].exists():
                 self.stage_counters['cnn']['existing_pre'] += 1
-            if 'binary_masks' in self.stage_counters and outputs['binary_masks'].exists():
-                self.stage_counters['binary_masks']['existing_pre'] += 1
+            if 'binary-masks' in self.stage_counters and outputs['binary_masks'].exists():
+                self.stage_counters['binary-masks']['existing_pre'] += 1
 
     def _stage_label(self, stage: str) -> str:
+        stage = _normalize_stage_name(stage)
         return STAGE_LABELS.get(stage, stage.upper())
 
     def _record_stage_generated(self, stage: str) -> None:
+        stage = _normalize_stage_name(stage)
         if stage in self.stage_counters:
             self.stage_counters[stage]['generated'] += 1
 
     def _record_stage_skipped(self, stage: str) -> None:
+        stage = _normalize_stage_name(stage)
         if stage in self.stage_counters:
             self.stage_counters[stage]['skipped'] += 1
 
@@ -304,14 +326,16 @@ class WindowExtractor:
         return nets
 
     def _stage_output_exists(self, stage: str, outputs: Dict[str, Path]) -> bool:
+        stage = _normalize_stage_name(stage)
         if stage == 'gds':
             return self._has_gds_outputs(outputs)
-        path_key = stage
+        path_key = STAGE_OUTPUT_KEYS.get(stage, stage)
         if path_key not in outputs:
             return False
         return outputs[path_key].exists()
 
     def _should_run_conversion_stage(self, stage: str, output_path: Path) -> bool:
+        stage = _normalize_stage_name(stage)
         if not self._stage_active.get(stage, False):
             return False
         if output_path.exists():
@@ -330,7 +354,7 @@ class WindowExtractor:
         else:
             print("  GDS stage disabled (cap3d stage not selected).")
 
-        for stage in ['cap3d', 'cnn', 'binary_masks', 'pct']:
+        for stage in ['cap3d', 'cnn', 'binary-masks', 'pct']:
             if stage not in self.stage_counters:
                 continue
             stats = self.stage_counters[stage]
@@ -1720,7 +1744,7 @@ class WindowExtractor:
                     continue
 
             # Common downstream conversion logic:
-            # - binary_masks runs from the window DEF
+            # - binary-masks runs from the window DEF
             # - cnn/pct continue to use CAP3D when available
             if cap3d_path.exists() or outputs['def'].exists():
                 self._run_downstream_conversions(window_entry, outputs['def'], cap3d_path)
@@ -1763,7 +1787,7 @@ class WindowExtractor:
                     print(f"    CNN conversion failed for {name}: {e}")
                     print(traceback.format_exc(), end="")
 
-        if self._should_run_conversion_stage('binary_masks', outputs['binary_masks']):
+        if self._should_run_conversion_stage('binary-masks', outputs['binary_masks']):
             if not def_path.exists():
                 print(f"    DEF file not found for binary-masks conversion: {name}: {def_path}")
             else:
@@ -1775,7 +1799,7 @@ class WindowExtractor:
                         selected_layers=selected_layers,
                         lef_files=[Path(path) for path in lef_files],
                     )
-                    self._record_stage_generated('binary_masks')
+                    self._record_stage_generated('binary-masks')
                 except Exception as e:
                     print(f"    Binary-masks conversion failed for {name}: {e}")
                     print(traceback.format_exc(), end="")
@@ -2141,9 +2165,9 @@ Examples:
 
   # Run only specific pipeline stages
   python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline cap3d cnn
-  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline binary_masks
+  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline binary-masks
   python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline pct
-  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline cnn binary_masks pct
+  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline cnn binary-masks pct
         '''
     )
 
@@ -2151,8 +2175,8 @@ Examples:
                        help='Multi-design YAML file with file paths and window coordinates')
     parser.add_argument('--dataset-path', type=str,
                        help='Dataset directory path for windows (default: directory containing the windows YAML)')
-    parser.add_argument('--pipeline', type=str, nargs='+', choices=['cap3d', 'cnn', 'binary_masks', 'pct'], default=['cap3d', 'cnn', 'binary_masks', 'pct'],
-                       help='Pipeline stages to run (default: all stages). Choose from: cap3d, cnn, binary_masks, pct')
+    parser.add_argument('--pipeline', type=str, nargs='+', choices=['cap3d', 'cnn', 'binary-masks', 'binary_masks', 'pct'], default=['cap3d', 'cnn', 'binary-masks', 'pct'],
+                       help='Pipeline stages to run (default: all stages). Choose from: cap3d, cnn, binary-masks, pct')
     parser.add_argument('--default-net-names', action='store_true',
                        help='Skip DEF→GDS net matching and assign sequential net names (faster).')
     

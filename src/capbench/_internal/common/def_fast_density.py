@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -1067,6 +1068,10 @@ def _validate_compiled_recipe_inputs(tech_path: Path) -> None:
     )
 
 
+def _is_compiled_supply_resolution_error(exc: BaseException) -> bool:
+    return "Compiled recipe could not resolve required supply" in str(exc)
+
+
 def build_compiled_def_runtime_config(
     tech_path: Path | str,
     *,
@@ -1443,16 +1448,26 @@ def prepare_fast_def_raster_input(
         raise ValueError(f"Unsupported fast DEF prepare backend '{backend}'")
 
     if backend in {"auto", "compiled"} and _supports_compiled_recipe_backend(tech_path):
-        return _prepare_compiled_def_raster_input(
-            def_path=def_path,
-            tech_path=tech_path,
-            target_size=target_size,
-            pixel_resolution=pixel_resolution,
-            selected_layers=selected_layers,
-            raster_bounds=raster_bounds,
-            include_supply_nets=include_supply_nets,
-            include_conductor_names=include_conductor_names,
-        )
+        try:
+            return _prepare_compiled_def_raster_input(
+                def_path=def_path,
+                tech_path=tech_path,
+                target_size=target_size,
+                pixel_resolution=pixel_resolution,
+                selected_layers=selected_layers,
+                raster_bounds=raster_bounds,
+                include_supply_nets=include_supply_nets,
+                include_conductor_names=include_conductor_names,
+            )
+        except RuntimeError as exc:
+            if backend != "auto" or not _is_compiled_supply_resolution_error(exc):
+                raise
+            warnings.warn(
+                "Falling back to the generic LEF+DEF raster backend because the compiled recipe "
+                f"could not resolve local supply nets for {def_path.name}.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     if backend == "compiled":
         raise ValueError(

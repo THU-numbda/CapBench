@@ -871,22 +871,38 @@ def filter_nets_in_window(nets: List[Net], included_component_names: Set[str], w
 
         if not pieces_per_layer:
             # Net connects to a component inside but has no visible routing; keep as a bare net
-            wn = Net(name=net.name, connections=connected_comps, routing=[], use=net.use)
+            wn = Net(
+                name=net.name,
+                connections=connected_comps,
+                routing=[],
+                use=net.use,
+                is_special=net.is_special,
+            )
             windowed_nets.append(wn)
             continue
 
         # If exactly one piece, preserve original net name
         if len(pieces_per_layer) == 1:
             layer, width, poly = pieces_per_layer[0]
-            wn = Net(name=net.name, connections=connected_comps,
-                     routing=[RoutingSegment(layer=layer, points=poly, width=width)], use=net.use)
+            wn = Net(
+                name=net.name,
+                connections=connected_comps,
+                routing=[RoutingSegment(layer=layer, points=poly, width=width)],
+                use=net.use,
+                is_special=net.is_special,
+            )
             windowed_nets.append(wn)
         else:
             # Create subnets for each disconnected piece (per layer). Numbered .1, .2, ...
             for idx, (layer, width, poly) in enumerate(pieces_per_layer, start=1):
                 sub_name = f"{net.name}.{idx}"
-                wn = Net(name=sub_name, connections=connected_comps,
-                         routing=[RoutingSegment(layer=layer, points=poly, width=width)], use=net.use)
+                wn = Net(
+                    name=sub_name,
+                    connections=connected_comps,
+                    routing=[RoutingSegment(layer=layer, points=poly, width=width)],
+                    use=net.use,
+                    is_special=net.is_special,
+                )
                 windowed_nets.append(wn)
 
     return windowed_nets
@@ -963,6 +979,7 @@ def write_def(output_file: Path, def_data: DefData, windowed_components: List[Co
                 for conn in net.connections:
                     f.write(f" ( {conn.component} {conn.pin} )")
                 f.write("\n")
+                f.write(f"      + USE {net.use}\n")
                 # Emit clipped routing segments if present
                 for seg in net.routing:
                     if not seg.points or len(seg.points) < 2:

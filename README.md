@@ -131,7 +131,7 @@ Developer-only flows are grouped under `python -m capbench dev`:
 
 ```bash
 python -m capbench dev list
-python -m capbench dev window-pipeline -- --windows-file /abs/path/windows.yaml --dataset-path /abs/path/dataset --pipeline binary_masks
+python -m capbench dev window-pipeline -- --windows-file /abs/path/windows.yaml --dataset-path /abs/path/dataset --pipeline binary-masks
 python -m capbench dev partition-cap3d -- --dataset-path /abs/path/dataset
 python -m capbench dev openrcx -- --process-nodes nangate45 --sizes small
 python -m capbench dev rwcap -- --process-nodes nangate45 --sizes small
