@@ -860,14 +860,13 @@ PreparedCompactResult prepare_def_raster_compiled(
             } else if (group.binding_kind == CompiledBindingKind::kSupplyNet) {
                 conductor_name = supply_nets[static_cast<std::size_t>(group.binding_slot)];
                 if (conductor_name.empty()) {
-                    throw std::runtime_error(
-                        "Compiled recipe could not resolve required supply '" +
-                        std::string(compiled_supply_name_for_slot(group.binding_slot)) +
-                        "' for instance '" + instance_name + "'"
-                    );
+                    resolved_binding_kind = CompiledBindingKind::kSyntheticNet;
+                    synthetic_label = "SUPPLY_" + std::string(compiled_supply_name_for_slot(group.binding_slot));
+                    ++prepared.component_stats[5];
+                } else {
+                    real_net_names.insert(conductor_name);
+                    ++prepared.component_stats[1];
                 }
-                real_net_names.insert(conductor_name);
-                ++prepared.component_stats[1];
             } else {
                 synthetic_label = "OBS" + std::to_string(group.synthetic_group_index);
                 ++prepared.component_stats[5];
