@@ -117,13 +117,13 @@ def _prepare_export_raster_input(
         raster_bounds=None,
         include_supply_nets=True,
         include_conductor_names=True,
-        backend="auto",
+        backend="compiled",
     )
 
 
-def _build_real_conductor_remap(
+def _build_export_conductor_metadata(
     prepared: PreparedDefRasterInput,
-) -> tuple[list[str], np.ndarray, np.ndarray]:
+) -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray]:
     if prepared.conductor_names_sorted is None:
         raise ValueError(f"Prepared DEF input did not include conductor names for {prepared.def_path}")
 
@@ -137,23 +137,18 @@ def _build_real_conductor_remap(
             f"names={len(names)} ids={len(ids)} synthetic={len(is_synthetic)}"
         )
 
-    real_names: list[str] = []
-    remap = np.zeros((int(ids.max()) + 1,) if ids.size else (1,), dtype=np.int32)
-    next_id = 1
-    for name, source_id, synthetic in zip(names, ids.tolist(), is_synthetic.tolist()):
-        if synthetic:
-            continue
-        if next_id > INT16_MAX:
-            raise ValueError(
-                f"Window {prepared.def_path.stem} has more than {INT16_MAX} real conductors, "
-                f"which exceeds the int16 export limit."
-            )
-        remap[int(source_id)] = next_id
-        real_names.append(name)
-        next_id += 1
+    if len(names) > INT16_MAX:
+        raise ValueError(
+            f"Window {prepared.def_path.stem} has more than {INT16_MAX} conductors, "
+            f"which exceeds the int16 export limit."
+        )
 
-    real_ids = np.arange(1, len(real_names) + 1, dtype=np.int16)
-    return real_names, real_ids, remap
+    remap = np.zeros((int(ids.max()) + 1,) if ids.size else (1,), dtype=np.int32)
+    for source_id in ids.tolist():
+        remap[int(source_id)] = int(source_id)
+
+    export_ids = ids.astype(np.int16, copy=False)
+    return names, export_ids, remap, is_synthetic
 
 
 def build_id_map_npz_data(prepared: PreparedDefRasterInput) -> Dict[str, np.ndarray]:
@@ -164,7 +159,7 @@ def build_id_map_npz_data(prepared: PreparedDefRasterInput) -> Dict[str, np.ndar
             f"Expected rasterized DEF ID maps with shape [layers, height, width], got {raw_idmaps.shape}"
         )
 
-    real_names, real_ids, remap = _build_real_conductor_remap(prepared)
+    conductor_names, conductor_ids, remap, conductor_is_synthetic = _build_export_conductor_metadata(prepared)
     remapped_idmaps = remap[raw_idmaps].astype(np.int16, copy=False)
 
     data: Dict[str, np.ndarray] = {
@@ -172,8 +167,9 @@ def build_id_map_npz_data(prepared: PreparedDefRasterInput) -> Dict[str, np.ndar
         "conductor_layers": np.array(list(prepared.channel_layers), dtype=object),
         "window_bounds": np.asarray(prepared.window_bounds, dtype=np.float64),
         "pixel_resolution": np.array(float(prepared.pixel_resolution), dtype=np.float64),
-        "conductor_names": np.array(real_names, dtype=object),
-        "conductor_ids": real_ids,
+        "conductor_names": np.array(conductor_names, dtype=object),
+        "conductor_ids": conductor_ids,
+        "conductor_is_synthetic": conductor_is_synthetic.astype(np.bool_, copy=False),
     }
 
     for layer_idx, layer_name in enumerate(prepared.channel_layers):
