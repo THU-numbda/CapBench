@@ -1419,17 +1419,25 @@ class WindowExtractor:
         # Group segments by net name (simplified approach)
         rebuilt: List[Net] = []
         segment_groups: defaultdict = defaultdict(list)
+        ordered_base_names: List[str] = []
+        seen_base_names: Set[str] = set()
 
         for net in nets:
+            b = base_name(net.name)
+            if b not in seen_base_names:
+                ordered_base_names.append(b)
+                seen_base_names.add(b)
             for seg in getattr(net, 'routing', []) or []:
-                b = base_name(net.name)
                 segment_groups[b].append(seg)
 
-        for base_name, segs in segment_groups.items():
-            # Create Net with required positional arguments
+        # Preserve bare connection-only nets as well. These nets are critical for
+        # keeping DEF component pin bindings alive when a clipped window has no
+        # visible routed geometry for the net itself.
+        for base_name in ordered_base_names:
+            segs = segment_groups.get(base_name, [])
             connections = net_conns.get(base_name, [])
             use = net_use.get(base_name, "SIGNAL")
-            new_net = Net(base_name, connections, segs, use)
+            new_net = Net(base_name, connections, list(segs), use)
             rebuilt.append(new_net)
 
         stats = {

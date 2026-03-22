@@ -20,7 +20,6 @@ from .window_density_dataset import (
     WindowCapDataset,
     _WindowData,
     _is_via_layer,
-    _name_variants,
 )
 
 
@@ -74,13 +73,10 @@ class IdMapWindowDataset(WindowCapDataset):
                 raise ValueError(f"Window {npz_path.stem} has no non-VIA layers")
 
             conductor_ids: Dict[str, int] = {}
-            sanitized_to_actual: Dict[str, str] = {}
             if "conductor_names" in data and "conductor_ids" in data:
                 for name, cid in zip(data["conductor_names"], data["conductor_ids"]):
                     actual = str(name)
                     conductor_ids[actual] = int(cid)
-                    for variant in _name_variants(actual):
-                        sanitized_to_actual.setdefault(variant, actual)
 
         return _WindowData(
             name=npz_path.stem,
@@ -88,5 +84,4 @@ class IdMapWindowDataset(WindowCapDataset):
             densities=densities,
             id_maps=id_maps,
             conductor_ids=conductor_ids,
-            sanitized_to_actual=sanitized_to_actual,
         )

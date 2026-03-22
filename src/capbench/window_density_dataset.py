@@ -14,7 +14,6 @@ densities of the conductors of interest so the network can focus on them.
 from __future__ import annotations
 
 import os
-import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -34,15 +33,6 @@ from capbench._internal.common.datasets import (
     LABELS_RWCAP_DIR,
 )
 
-
-_SPECIAL_CHARS = re.compile(r"[\/\\\[\]\{\}\$]")
-
-
-def _sanitize_net_name(name: str) -> str:
-    """Normalize net names to ease matching between NPZ metadata and SPEF."""
-    return _SPECIAL_CHARS.sub("", name).lower()
-
-
 def _is_via_layer(layer_name: str) -> bool:
     """Treat VIA layers as non-trainable channels and skip them entirely."""
     upper = layer_name.upper()
@@ -56,7 +46,6 @@ class _WindowData:
     densities: List[np.ndarray]  # length L, each entry shape (H, W), float32
     id_maps: List[np.ndarray]  # length L, int32
     conductor_ids: Dict[str, int]  # actual name -> id
-    sanitized_to_actual: Dict[str, str]
     base_features: Optional[np.ndarray] = None
     conductor_coords: Dict[int, List[Tuple[int, np.ndarray, np.ndarray]]] = field(default_factory=dict)
     conductor_local_map: Optional[np.ndarray] = None  # shape (L, H, W), 0 = background, >0 = local conductor index
@@ -632,13 +621,10 @@ class WindowCapDataset(Dataset):
                 raise ValueError(f"Window {npz_path.stem} has no non-VIA layers")
 
             conductor_ids: Dict[str, int] = {}
-            sanitized_to_actual: Dict[str, str] = {}
             if "conductor_names" in data and "conductor_ids" in data:
                 for name, cid in zip(data["conductor_names"], data["conductor_ids"]):
                     actual = str(name)
                     conductor_ids[actual] = int(cid)
-                    for variant in _name_variants(actual):
-                        sanitized_to_actual.setdefault(variant, actual)
 
         return _WindowData(
             name=npz_path.stem,
@@ -646,7 +632,6 @@ class WindowCapDataset(Dataset):
             densities=densities,
             id_maps=id_maps,
             conductor_ids=conductor_ids,
-            sanitized_to_actual=sanitized_to_actual,
         )
 
     def _prepare_window_tensors(self) -> None:
@@ -815,19 +800,19 @@ class WindowCapDataset(Dataset):
         if self.goal == "self":
             total_caps = load_dnet_totals(str(spef_path))
             self_caps: Dict[str, float] = {
-                _sanitize_net_name(name): value for name, value in total_caps.items()
+                str(name): float(value) for name, value in total_caps.items()
             }
             return self_caps, pair_caps
 
         _, adjacency, _ = parse_spef_components(str(spef_path))
         for name_a, neighbors in adjacency.items():
-            norm_a = _sanitize_net_name(name_a)
             neighbor_iter = neighbors.items() if isinstance(neighbors, dict) else neighbors
             for name_b, value in neighbor_iter:
-                norm_b = _sanitize_net_name(name_b)
-                if norm_a == norm_b:
+                raw_a = str(name_a)
+                raw_b = str(name_b)
+                if raw_a == raw_b:
                     continue
-                pair = tuple(sorted((norm_a, norm_b)))
+                pair = tuple(sorted((raw_a, raw_b)))
                 if pair in pair_caps:
                     pair_caps[pair] = 0.5 * (pair_caps[pair] + value)
                 else:
@@ -847,11 +832,15 @@ class WindowCapDataset(Dataset):
         samples: List[_SampleMeta] = []
 
         if self.goal == "self":
-            for sanitized, actual in window.sanitized_to_actual.items():
-                cap = self_caps.get(sanitized)
-                if cap is None:
+            seen_conductor_ids: set[int] = set()
+            for spef_name, cap in self_caps.items():
+                actual = str(spef_name)
+                conductor_id = window.conductor_ids.get(actual)
+                if conductor_id is None:
                     continue
-                conductor_id = window.conductor_ids[actual]
+                if conductor_id in seen_conductor_ids:
+                    continue
+                seen_conductor_ids.add(conductor_id)
                 label = f"{window.name}:{actual}"
 
                 cap_value = float(cap) * 1e15
@@ -869,17 +858,22 @@ class WindowCapDataset(Dataset):
                 )
         else:  # coupling
             centroids = self._compute_conductor_centroids(window)
-            for (san_a, san_b), value in pair_caps.items():
-                actual_a = window.sanitized_to_actual.get(san_a)
-                actual_b = window.sanitized_to_actual.get(san_b)
-                if actual_a is None or actual_b is None:
+            seen_pairs: set[tuple[int, int]] = set()
+            for (name_a, name_b), value in pair_caps.items():
+                actual_a = str(name_a)
+                actual_b = str(name_b)
+                id_a = window.conductor_ids.get(actual_a)
+                id_b = window.conductor_ids.get(actual_b)
+                if id_a is None or id_b is None:
                     continue
 
                 if value <= 1e-20:
                     continue
 
-                id_a = window.conductor_ids[actual_a]
-                id_b = window.conductor_ids[actual_b]
+                pair_ids = tuple(sorted((id_a, id_b)))
+                if pair_ids in seen_pairs:
+                    continue
+                seen_pairs.add(pair_ids)
                 centroid_a = centroids.get(id_a)
                 centroid_b = centroids.get(id_b)
                 dist_a = self._coordinate_distance_sq(centroid_a)
@@ -977,14 +971,3 @@ class WindowCapDataset(Dataset):
             return float("inf")
         z, y, x = coord
         return float(z * z + y * y + x * x)
-
-
-def _name_variants(name: str) -> List[str]:
-    base = _sanitize_net_name(name)
-    variants = {base}
-    if '.' in base:
-        variants.add(base.replace('.', ''))
-        variants.add(base.split('.', 1)[0])
-    variants.add(base.replace(':', ''))
-    variants.add(base.replace('.', '').replace(':', ''))
-    return [v for v in variants if v]

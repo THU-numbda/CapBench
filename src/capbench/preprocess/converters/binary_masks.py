@@ -22,6 +22,7 @@ from capbench._internal.common.def_fast_density import (
     prepare_fast_def_raster_input,
     rasterize_def_idmaps_cpu,
 )
+from capbench._internal.common.net_names import canonicalize_binary_mask_conductor_names
 from capbench.preprocess.converters.cnn_cap import (
     _resolve_target_size,
 )
@@ -127,21 +128,26 @@ def _build_export_conductor_metadata(
     if prepared.conductor_names_sorted is None:
         raise ValueError(f"Prepared DEF input did not include conductor names for {prepared.def_path}")
 
-    names = [str(name) for name in prepared.conductor_names_sorted]
+    raw_names = [str(name) for name in prepared.conductor_names_sorted]
     ids = np.asarray(prepared.conductor_ids_sorted, dtype=np.int32)
     is_synthetic = np.asarray(prepared.conductor_is_synthetic, dtype=bool)
 
-    if not (len(names) == len(ids) == len(is_synthetic)):
+    if not (len(raw_names) == len(ids) == len(is_synthetic)):
         raise ValueError(
             f"Conductor metadata length mismatch for {prepared.def_path}: "
-            f"names={len(names)} ids={len(ids)} synthetic={len(is_synthetic)}"
+            f"names={len(raw_names)} ids={len(ids)} synthetic={len(is_synthetic)}"
         )
 
-    if len(names) > INT16_MAX:
+    if len(raw_names) > INT16_MAX:
         raise ValueError(
             f"Window {prepared.def_path.stem} has more than {INT16_MAX} conductors, "
             f"which exceeds the int16 export limit."
         )
+
+    try:
+        names = canonicalize_binary_mask_conductor_names(raw_names, is_synthetic.tolist())
+    except ValueError as exc:
+        raise ValueError(f"{exc} for {prepared.def_path}") from exc
 
     remap = np.zeros((int(ids.max()) + 1,) if ids.size else (1,), dtype=np.int32)
     for source_id in ids.tolist():

@@ -22,7 +22,6 @@ EXAMPLE:
 
 import argparse
 import io
-import re
 import sys
 import yaml
 from collections import defaultdict
@@ -31,12 +30,9 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Set, Optional, DefaultDict
 
 from capbench._internal.klayout_compat import pya, require_pya
+from capbench._internal.common.net_names import Cap3DNetNameSanitizer
 from capbench.preprocess.cap3d_writer import write_cap3d
 from capbench.preprocess.def_parser import parse_def
-
-
-# Strip everything except alphanumerics, underscore, and dot.
-NET_NAME_CLEAN_RE = re.compile(r"[^A-Za-z0-9_.]")
 
 @dataclass
 class LayerEntry:
@@ -100,8 +96,7 @@ class DEF2Cap3D:
         self.def_nets = set()     # nets from DEF
         self.unnamed_count = 0
         self.floating_nets: Dict[str, int] = {}
-        self._sanitized_net_name_cache: Dict[str, str] = {}
-        self._used_net_names: Set[str] = set()
+        self._net_name_sanitizer = Cap3DNetNameSanitizer()
 
     
     def _infer_process_node(self) -> Optional[str]:
@@ -151,23 +146,7 @@ class DEF2Cap3D:
 
     def _sanitize_net_name(self, name: str) -> str:
         """Return a safe net name with disallowed characters removed."""
-        cached = self._sanitized_net_name_cache.get(name)
-        if cached is not None:
-            return cached
-
-        sanitized = NET_NAME_CLEAN_RE.sub("", name).strip()
-        if not sanitized:
-            sanitized = "NET"
-
-        candidate = sanitized
-        suffix = 1
-        while candidate in self._used_net_names:
-            candidate = f"{sanitized}_{suffix}"
-            suffix += 1
-
-        self._used_net_names.add(candidate)
-        self._sanitized_net_name_cache[name] = candidate
-        return candidate
+        return self._net_name_sanitizer.sanitize(name)
 
     def _load_yaml_stack(self):
         """Parse YAML layer stack file and build layer maps and dielectric stack.
