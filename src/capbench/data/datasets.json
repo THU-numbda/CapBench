@@ -24,7 +24,6 @@
         "gds": null,
         "windows.yaml": null,
         "density_maps": "cnn",
-        "binary-masks": "binary-masks",
         "labels_rwcap": null,
         "point_clouds": "pct"
       }
@@ -53,7 +52,6 @@
         "gds": null,
         "windows.yaml": null,
         "density_maps": "cnn",
-        "binary-masks": "binary-masks",
         "labels_rwcap": null,
         "point_clouds": "pct"
       }
@@ -82,7 +80,6 @@
         "gds": null,
         "windows.yaml": null,
         "density_maps": "cnn",
-        "binary-masks": "binary-masks",
         "labels_rwcap": null,
         "point_clouds": "pct"
       }
@@ -112,7 +109,6 @@
         "windows.yaml": null,
         "density_maps": "cnn",
         "labels_rwcap": null,
-        "binary-masks": "binary-masks",
         "point_clouds": "pct"
       }
     },
@@ -141,7 +137,6 @@
         "windows.yaml": null,
         "density_maps": "cnn",
         "labels_rwcap": null,
-        "binary-masks": "binary-masks",
         "point_clouds": "pct"
       }
     },
@@ -170,7 +165,6 @@
         "windows.yaml": null,
         "density_maps": "cnn",
         "labels_rwcap": null,
-        "binary-masks": "binary-masks",
         "point_clouds": "pct"
       }
     },
@@ -199,7 +193,6 @@
         "windows.yaml": null,
         "density_maps": "cnn",
         "labels_rwcap": null,
-        "binary-masks": "binary-masks",
         "point_clouds": "pct"
       }
     },
@@ -228,7 +221,6 @@
         "windows.yaml": null,
         "density_maps": "cnn",
         "labels_rwcap": null,
-        "binary-masks": "binary-masks",
         "point_clouds": "pct"
       }
     },
@@ -257,7 +249,6 @@
         "windows.yaml": null,
         "density_maps": "cnn",
         "labels_rwcap": null,
-        "binary-masks": "binary-masks",
         "point_clouds": "pct"
       }
     }

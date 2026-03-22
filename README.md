@@ -5,7 +5,7 @@ CapBench is now a pip-first Python library for cached layout datasets, standardi
 The supported user-facing surface is:
 
 - cached dataset download and preprocessing
-- standardized dataloader access for density maps and binary masks
+- standardized dataloader access for CAP3D-backed density maps and density-map ID maps
 - visualization for CAP3D, density maps, and point clouds
 
 The following flows remain in the repository, but are considered developer-only tooling rather than the default product:
@@ -107,7 +107,7 @@ Developer-only flows are grouped under `python -m capbench dev`:
 
 ```bash
 python -m capbench dev list
-python -m capbench dev window-pipeline -- --windows-file /abs/path/windows.yaml --dataset-path /abs/path/dataset --pipeline binary-masks
+python -m capbench dev window-pipeline -- --windows-file /abs/path/windows.yaml --dataset-path /abs/path/dataset --pipeline cnn
 python -m capbench dev partition-cap3d -- --dataset-path /abs/path/dataset
 python -m capbench dev openrcx -- --process-nodes nangate45 --sizes small
 python -m capbench dev rwcap -- --process-nodes nangate45 --sizes small
@@ -122,10 +122,10 @@ The supported public namespace is `capbench.*`.
 
 ```python
 from capbench.datasets import install_dataset, resolve_dataset_path
-from capbench.dataloaders import load_density_window_dataset, load_binary_mask_window_dataset
+from capbench.dataloaders import load_density_window_dataset, load_density_id_window_dataset
 
 root = install_dataset("nangate45")
-dataset = load_binary_mask_window_dataset("nangate45/small", goal="self")
+dataset = load_density_id_window_dataset("nangate45/small", goal="self")
 ```
 
 Legacy top-level modules such as `common`, `window_tools`, `spef_tools`, and `viewers` are no longer packaged. Supported code should import only `capbench.*`.

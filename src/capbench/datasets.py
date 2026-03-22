@@ -27,7 +27,6 @@ from .registry import DatasetEntry, DatasetSource, get_dataset_entry, list_datas
 
 
 DEFAULT_ARTIFACT_STAGES = {
-    "binary-masks": "binary-masks",
     "density_maps": "cnn",
     "point_clouds": "pct",
 }

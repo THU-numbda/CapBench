@@ -49,6 +49,29 @@ def load_density_window_dataset(
     )
 
 
+def load_density_id_window_dataset(
+    dataset: str | Path,
+    *,
+    goal: str = "self",
+    solver_preference: str = "auto",
+    window_ids: Optional[Sequence[str]] = None,
+    build_workers: int = 0,
+    highlight_scale: float = 1.0,
+):
+    dataset_root = resolve_cached_dataset(dataset, artifacts=["density_maps"])
+    spef_dir = _resolve_label_dir(dataset_root, solver_preference)
+    return IdMapWindowDataset(
+        window_dir=dataset_root / "density_maps",
+        spef_dir=spef_dir,
+        window_ids=window_ids,
+        goal=goal,
+        highlight_scale=highlight_scale,
+        solver_preference=solver_preference,
+        build_workers=build_workers,
+        trim_margin=True,
+    )
+
+
 def load_binary_mask_window_dataset(
     dataset: str | Path,
     *,
