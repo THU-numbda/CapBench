@@ -165,15 +165,20 @@ class WindowExtractor:
         self._l2n_cache: Dict[Tuple[Path, Path], Dict[str, Any]] = {}  # (gds_path, layermap_file) -> l2n_data
         self._layer_mapping_cache: Dict[int, Dict[str, List[int]]] = {}  # layout_id -> layer mappings
         self._lef_macro_size_cache: Dict[Tuple[str, ...], Dict[str, Tuple[float, float]]] = {}
+        self._resolved_path_cache: Dict[str, Path] = {}
 
         # Load multi-design configuration
         self.designs = self.load_multi_design_yaml()
         self._config_window_count = len(self.all_windows)
 
     def _resolve_design_path(self, raw_path: Optional[str]) -> Optional[Path]:
-        """Resolve design resource paths, supporting legacy designs/tech prefixes."""
+        """Resolve design resource paths against the configured search roots."""
         if not raw_path:
             return None
+
+        cached = self._resolved_path_cache.get(raw_path)
+        if cached is not None:
+            return cached
 
         raw = Path(raw_path)
         candidates: List[Path] = []
@@ -189,12 +194,6 @@ class WindowExtractor:
         for root in self._search_roots:
             add_candidate(root, raw)
 
-        parts = raw.parts
-        if len(parts) >= 2 and parts[0] == 'designs' and parts[1] == 'tech':
-            trimmed = Path('tech', *parts[2:])
-            for root in self._search_roots:
-                add_candidate(root, trimmed)
-
         seen: Set[str] = set()
         for candidate in candidates:
             candidate = candidate if candidate.is_absolute() else candidate
@@ -203,10 +202,11 @@ class WindowExtractor:
                 continue
             seen.add(key)
             if candidate.exists():
-                if Path(raw_path) != candidate:
-                    print(f"[window_processing_pipeline] Remapped {raw_path} -> {candidate}")
-                return candidate.resolve()
+                resolved = candidate.resolve()
+                self._resolved_path_cache[raw_path] = resolved
+                return resolved
 
+        self._resolved_path_cache[raw_path] = raw
         return raw
 
     def _resolve_lef_files(self, stack_file: Path, tech_node: Optional[str]) -> List[str]:

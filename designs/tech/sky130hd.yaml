@@ -1,0 +1,38 @@
+# Sky130HD Technology Stack - ITF-derived unified structure
+# Bottom → top stack with dielectrics and metals interleaved
+
+# Unified stack (bottom → top) - dielectrics and metals interleaved
+stack:
+  - { name: PSUB, type: dielectric, thickness_um: 0.12, er: 3.9 }
+  - { name: FOX, type: dielectric, thickness_um: 0.3262, er: 3.9 }
+  - { name: PSG, type: dielectric, thickness_um: 0.6099, er: 3.9 }
+  - { name: LINT, type: dielectric, thickness_um: 0.175, er: 7.3 }
+  - { name: NILD2_PART1, type: dielectric, thickness_um: 0.365, er: 4.05 }
+  - { name: NILD2_PART2, type: dielectric, thickness_um: 0.63, er: 4.5 }
+  - { name: li1, type: metal, thickness_um: 0.17, wmin_um: 0.17 }
+  - { name: NILD3, type: dielectric, thickness_um: 0.63, er: 4.5 }
+  - { name: met1, type: metal, thickness_um: 0.36, wmin_um: 0.14 }
+  - { name: NILD4, type: dielectric, thickness_um: 0.78, er: 4.2 }
+  - { name: met2, type: metal, thickness_um: 0.36, wmin_um: 0.14 }
+  - { name: NILD5, type: dielectric, thickness_um: 1.235, er: 4.1 }
+  - { name: met3, type: metal, thickness_um: 0.845, wmin_um: 0.3 }
+  - { name: NILD6, type: dielectric, thickness_um: 1.35, er: 4.0 }
+  - { name: met4, type: metal, thickness_um: 0.845, wmin_um: 0.3 }
+  - { name: TOPNIT_PART1, type: dielectric, thickness_um: 0.3777, er: 7.5 }
+  - { name: TOPNIT_PART2, type: dielectric, thickness_um: 6.1346, er: 2.94 }
+  - { name: met5, type: metal, thickness_um: 1.26, wmin_um: 0.8 }
+  - { name: TOP_AIR, type: dielectric, thickness_um: 10.0, er: 1.0 }
+
+# Vias with connectivity and minimum widths only
+vias:
+  mcon: { from: li1, to: met1, wmin_um: 0.17 }
+  via: { from: met1, to: met2, wmin_um: 0.15 }
+  via2: { from: met2, to: met3, wmin_um: 0.2 }
+  via3: { from: met3, to: met4, wmin_um: 0.2 }
+  via4: { from: met4, to: met5, wmin_um: 0.82 }
+
+metadata:
+  tech_node: sky130hd
+  source_itf: sky130hd.itf
+  layermap_source: sky130hd.layermap
+  description: "Sky130HD technology stack with unified dielectric/metal structure and original layer names"
