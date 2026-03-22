@@ -290,24 +290,6 @@ def rasterize_packed_rects_cuda(
     )
 
 
-def rasterize_binary_masks_cuda(
-    packed_rects_cuda: torch.Tensor,
-    *,
-    num_layers: int,
-    target_size: int,
-    real_conductor_count: int,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    module = load_idmap_expand_cuda_extension()
-    occupied, master_masks = module.rasterize_binary_masks(
-        packed_rects_cuda,
-        int(num_layers),
-        int(target_size),
-        int(target_size),
-        int(real_conductor_count),
-    )
-    return occupied, master_masks
-
-
 def rasterize_packed_rects_with_sparse_cuda(
     packed_rects_cuda: torch.Tensor,
     *,
@@ -331,26 +313,6 @@ def rasterize_packed_rects_with_sparse_cuda(
         int(own_y0),
         int(own_y1),
     )
-
-
-def rasterize_binary_masks_cpu(
-    packed_rects: np.ndarray,
-    *,
-    num_layers: int,
-    target_size: int,
-    real_conductor_count: int,
-) -> Tuple[np.ndarray, np.ndarray]:
-    occupied = np.zeros((num_layers, target_size, target_size), dtype=np.uint8)
-    master_masks = np.zeros((real_conductor_count, num_layers, target_size, target_size), dtype=np.uint8)
-    packed_rects = np.asarray(packed_rects, dtype=np.int32)
-    for idx in range(int(packed_rects.shape[0])):
-        layer, cid, x0, x1, y0, y1 = packed_rects[idx]
-        if layer < 0 or cid <= 0 or x0 >= x1 or y0 >= y1 or layer >= num_layers:
-            continue
-        occupied[layer, y0:y1, x0:x1] = np.uint8(1)
-        if cid <= real_conductor_count:
-            master_masks[cid - 1, layer, y0:y1, x0:x1] = np.uint8(1)
-    return occupied, master_masks
 
 
 def expand_fast_idmaps_cpu(prepared: PreparedFastRasterInput) -> np.ndarray:

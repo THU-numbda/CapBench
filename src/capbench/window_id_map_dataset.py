@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
-from capbench._internal.common.datasets import BINARY_MASKS_DIR
+from capbench._internal.common.datasets import DENSITY_MAPS_DIR
 from .window_density_dataset import (
     WindowCapDataset,
     _WindowData,
@@ -36,7 +36,7 @@ class IdMapWindowDataset(WindowCapDataset):
 
     def __init__(
         self,
-        window_dir: Path | str = BINARY_MASKS_DIR,
+        window_dir: Path | str = DENSITY_MAPS_DIR,
         spef_dir: Optional[Path | str] = None,
         window_ids: Optional[Sequence[str]] = None,
         goal: str = "self",

@@ -119,52 +119,6 @@ __global__ void scatter_owned_sparse_indices_kernel(
     sparse_indices[cid * max_sparse_points + position] = flat_idx;
 }
 
-__global__ void paint_binary_masks_kernel(
-    const int32_t* __restrict__ packed_rects,
-    uint8_t* __restrict__ occupied,
-    uint8_t* __restrict__ master_masks,
-    int64_t block_count,
-    int64_t num_layers,
-    int64_t height,
-    int64_t width,
-    int64_t real_conductor_count) {
-    int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx >= block_count) {
-        return;
-    }
-
-    const int64_t row = idx * RECT_COL_COUNT;
-    const int32_t layer = packed_rects[row + RECT_COL_LAYER];
-    const int32_t cid = packed_rects[row + RECT_COL_CONDUCTOR_ID];
-    if (layer < 0 || cid <= 0 || layer >= num_layers) {
-        return;
-    }
-
-    const int32_t x0 = max(0, packed_rects[row + RECT_COL_PX_MIN]);
-    const int32_t x1 = min(static_cast<int32_t>(width), packed_rects[row + RECT_COL_PX_MAX]);
-    const int32_t y0 = max(0, packed_rects[row + RECT_COL_PY_MIN]);
-    const int32_t y1 = min(static_cast<int32_t>(height), packed_rects[row + RECT_COL_PY_MAX]);
-    if (x0 >= x1 || y0 >= y1) {
-        return;
-    }
-
-    const int64_t layer_base = static_cast<int64_t>(layer) * height * width;
-    const bool is_real_master = cid <= real_conductor_count;
-    const int64_t master_base = is_real_master
-        ? (static_cast<int64_t>(cid) - 1) * num_layers * height * width + layer_base
-        : 0;
-    for (int32_t y = y0; y < y1; ++y) {
-        const int64_t occ_row_base = layer_base + static_cast<int64_t>(y) * width;
-        const int64_t master_row_base = master_base + static_cast<int64_t>(y) * width;
-        for (int32_t x = x0; x < x1; ++x) {
-            occupied[occ_row_base + x] = static_cast<uint8_t>(1);
-            if (is_real_master) {
-                master_masks[master_row_base + x] = static_cast<uint8_t>(1);
-            }
-        }
-    }
-}
-
 torch::Tensor rasterize_idmaps_cuda(
     torch::Tensor packed_rects,
     int64_t num_layers,
@@ -200,51 +154,6 @@ torch::Tensor rasterize_idmaps_cuda(
 
     return out;
 }
-
-std::tuple<torch::Tensor, torch::Tensor> rasterize_binary_masks_cuda(
-    torch::Tensor packed_rects,
-    int64_t num_layers,
-    int64_t height,
-    int64_t width,
-    int64_t real_conductor_count) {
-    TORCH_CHECK(packed_rects.is_cuda(), "packed_rects must be CUDA");
-    TORCH_CHECK(packed_rects.dim() == 2, "packed_rects must be 2D");
-    TORCH_CHECK(packed_rects.size(1) == RECT_COL_COUNT, "packed_rects column mismatch");
-    TORCH_CHECK(packed_rects.scalar_type() == torch::kInt32, "packed_rects must be int32");
-    TORCH_CHECK(num_layers > 0, "num_layers must be positive");
-    TORCH_CHECK(height > 0, "height must be positive");
-    TORCH_CHECK(width > 0, "width must be positive");
-    TORCH_CHECK(real_conductor_count >= 0, "real_conductor_count must be non-negative");
-
-    auto occupied = torch::zeros({num_layers, height, width}, packed_rects.options().dtype(torch::kUInt8));
-    auto master_masks = torch::zeros(
-        {real_conductor_count, num_layers, height, width},
-        packed_rects.options().dtype(torch::kUInt8)
-    );
-    const auto block_count = packed_rects.size(0);
-    if (block_count == 0) {
-        return std::make_tuple(occupied, master_masks);
-    }
-
-    c10::cuda::CUDAGuard guard(packed_rects.device());
-    cudaStream_t stream = at::cuda::getCurrentCUDAStream(packed_rects.get_device()).stream();
-
-    const int threads = 128;
-    const int blocks = static_cast<int>((block_count + threads - 1) / threads);
-    paint_binary_masks_kernel<<<blocks, threads, 0, stream>>>(
-        packed_rects.data_ptr<int32_t>(),
-        occupied.data_ptr<uint8_t>(),
-        master_masks.data_ptr<uint8_t>(),
-        block_count,
-        num_layers,
-        height,
-        width,
-        real_conductor_count);
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-    return std::make_tuple(occupied, master_masks);
-}
-
 std::tuple<
     torch::Tensor,
     torch::Tensor,

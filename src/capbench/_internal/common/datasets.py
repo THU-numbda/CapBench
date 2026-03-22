@@ -35,7 +35,6 @@ def get_dataset_subdirs(dataset_path: Optional[Path] = None) -> Dict[str, Path]:
         'def': base_path / "def",
         'point_clouds': base_path / "point_clouds",
         'density_maps': base_path / "density_maps",
-        'binary_masks': base_path / "binary-masks",
         'density_maps_scaled': base_path / "density_maps_scaled",
         'labels_rwcap': base_path / "labels_rwcap",
         'labels_raphael': base_path / "labels_raphael",
@@ -46,7 +45,6 @@ def get_dataset_subdirs(dataset_path: Optional[Path] = None) -> Dict[str, Path]:
 CAP3D_DIR = DATASET_ROOT / "cap3d"
 POINT_CLOUDS_DIR = DATASET_ROOT / "point_clouds"
 DENSITY_MAPS_DIR = DATASET_ROOT / "density_maps"
-BINARY_MASKS_DIR = DATASET_ROOT / "binary-masks"
 LABELS_RWCAP_DIR = DATASET_ROOT / "labels_rwcap"
 LABELS_RAPHAEL_DIR = DATASET_ROOT / "labels_raphael"
 MANIFESTS_DIR = DATASET_ROOT / "manifests"

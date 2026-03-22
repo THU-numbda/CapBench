@@ -11,8 +11,6 @@ from .paths import get_cache_dir
 
 
 ARTIFACT_ALIASES = {
-    "binary_masks": "binary-masks",
-    "binary-masks": "binary-masks",
     "density_maps": "density_maps",
     "density-maps": "density_maps",
     "point_clouds": "point_clouds",
@@ -32,7 +30,6 @@ ARTIFACT_RELATIVE_PATHS = {
     "def": Path("def"),
     "gds": Path("gds"),
     "density_maps": Path("density_maps"),
-    "binary-masks": Path("binary-masks"),
     "point_clouds": Path("point_clouds"),
     "labels_rwcap": Path("labels_rwcap"),
     "labels_raphael": Path("labels_raphael"),

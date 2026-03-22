@@ -31,7 +31,6 @@ from capbench.preprocess.def_parser import (
 )
 from capbench.preprocess.converters.pct_cap import convert_window as convert_pct_window
 from capbench.preprocess.converters.cnn_cap import convert_window as convert_cnn_window
-from capbench.preprocess.converters.binary_masks import convert_window as convert_binary_masks_window
 from capbench._internal.common.datasets import (
     extract_process_node_from_path,
     find_tech_stack_for_process_node,
@@ -46,22 +45,15 @@ STAGE_LABELS = {
     'cap3d': 'CAP3D',
     'pct': 'PCT point clouds',
     'cnn': 'CNN density maps',
-    'binary-masks': 'U-Net binary masks',
 }
 
-STAGE_PRINT_ORDER = ['gds', 'cap3d', 'cnn', 'binary-masks', 'pct']
+STAGE_PRINT_ORDER = ['gds', 'cap3d', 'cnn', 'pct']
 
 STAGE_ALIASES = {
     'gds': 'gds',
     'cap3d': 'cap3d',
     'pct': 'pct',
     'cnn': 'cnn',
-    'binary_masks': 'binary-masks',
-    'binary-masks': 'binary-masks',
-}
-
-STAGE_OUTPUT_KEYS = {
-    'binary-masks': 'binary_masks',
 }
 
 DEFAULT_LAYER_LIMITS = {
@@ -102,7 +94,7 @@ class WindowExtractor:
         self.process_node = process_node
         self.tech_stack_file = tech_stack_file
         self.layermap_file = Path(layermap_file) if layermap_file else None
-        raw_pipeline_stages = pipeline_stages or ['cap3d', 'cnn', 'binary-masks', 'pct']
+        raw_pipeline_stages = pipeline_stages or ['cap3d', 'cnn', 'pct']
         self.pipeline_stages = [_normalize_stage_name(stage) for stage in raw_pipeline_stages]
         self.rebase_origin = True
         self.group_with_l2n = True
@@ -241,7 +233,6 @@ class WindowExtractor:
             'cap3d': self.cap3d_output_dir / f"{window_name}.cap3d",
             'pct': self.dataset_dirs['point_clouds'] / f"{window_name}.npz",
             'cnn': self.dataset_dirs['density_maps'] / f"{window_name}.npz",
-            'binary_masks': self.dataset_dirs['binary_masks'] / f"{window_name}.npz",
         }
 
     def _load_lef_macro_sizes(self, stack_file: Path, tech_node: Optional[str]) -> Dict[str, Tuple[float, float]]:
@@ -262,7 +253,6 @@ class WindowExtractor:
             'cap3d': self.should_run_stage('cap3d'),
             'pct': self.should_run_stage('pct'),
             'cnn': self.should_run_stage('cnn'),
-            'binary-masks': self.should_run_stage('binary-masks'),
         }
 
     def _initialize_stage_counters(self, total_windows: int) -> Dict[str, Dict[str, int]]:
@@ -294,8 +284,6 @@ class WindowExtractor:
                 self.stage_counters['pct']['existing_pre'] += 1
             if 'cnn' in self.stage_counters and outputs['cnn'].exists():
                 self.stage_counters['cnn']['existing_pre'] += 1
-            if 'binary-masks' in self.stage_counters and outputs['binary_masks'].exists():
-                self.stage_counters['binary-masks']['existing_pre'] += 1
 
     def _stage_label(self, stage: str) -> str:
         stage = _normalize_stage_name(stage)
@@ -329,10 +317,9 @@ class WindowExtractor:
         stage = _normalize_stage_name(stage)
         if stage == 'gds':
             return self._has_gds_outputs(outputs)
-        path_key = STAGE_OUTPUT_KEYS.get(stage, stage)
-        if path_key not in outputs:
+        if stage not in outputs:
             return False
-        return outputs[path_key].exists()
+        return outputs[stage].exists()
 
     def _should_run_conversion_stage(self, stage: str, output_path: Path) -> bool:
         stage = _normalize_stage_name(stage)
@@ -354,7 +341,7 @@ class WindowExtractor:
         else:
             print("  GDS stage disabled (cap3d stage not selected).")
 
-        for stage in ['cap3d', 'cnn', 'binary-masks', 'pct']:
+        for stage in ['cap3d', 'cnn', 'pct']:
             if stage not in self.stage_counters:
                 continue
             stats = self.stage_counters[stage]
@@ -1754,7 +1741,6 @@ class WindowExtractor:
                     continue
 
             # Common downstream conversion logic:
-            # - binary-masks runs from the window DEF
             # - cnn/pct continue to use CAP3D when available
             if cap3d_path.exists() or outputs['def'].exists():
                 self._run_downstream_conversions(window_entry, outputs['def'], cap3d_path)
@@ -1795,23 +1781,6 @@ class WindowExtractor:
                     self._record_stage_generated('cnn')
                 except Exception as e:
                     print(f"    CNN conversion failed for {name}: {e}")
-                    print(traceback.format_exc(), end="")
-
-        if self._should_run_conversion_stage('binary-masks', outputs['binary_masks']):
-            if not def_path.exists():
-                print(f"    DEF file not found for binary-masks conversion: {name}: {def_path}")
-            else:
-                try:
-                    convert_binary_masks_window(
-                        def_path,
-                        window_entry['stack_file'],
-                        dataset_dirs=self.dataset_dirs,
-                        selected_layers=selected_layers,
-                        lef_files=[Path(path) for path in lef_files],
-                    )
-                    self._record_stage_generated('binary-masks')
-                except Exception as e:
-                    print(f"    Binary-masks conversion failed for {name}: {e}")
                     print(traceback.format_exc(), end="")
 
     def _process_window(self, window_entry: Dict[str, Any]) -> None:
@@ -2178,11 +2147,9 @@ Examples:
 
   # Run only specific pipeline stages
   python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline gds
-  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline gds binary-masks
   python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline cap3d cnn
-  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline binary-masks
   python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline pct
-  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline cnn binary-masks pct
+  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline cnn pct
         '''
     )
 
@@ -2190,8 +2157,8 @@ Examples:
                        help='Multi-design YAML file with file paths and window coordinates')
     parser.add_argument('--dataset-path', type=str,
                        help='Dataset directory path for windows (default: directory containing the windows YAML)')
-    parser.add_argument('--pipeline', type=str, nargs='+', choices=['gds', 'cap3d', 'cnn', 'binary-masks', 'binary_masks', 'pct'], default=['cap3d', 'cnn', 'binary-masks', 'pct'],
-                       help='Pipeline stages to run (default: all stages). Choose from: gds, cap3d, cnn, binary-masks, pct')
+    parser.add_argument('--pipeline', type=str, nargs='+', choices=['gds', 'cap3d', 'cnn', 'pct'], default=['cap3d', 'cnn', 'pct'],
+                       help='Pipeline stages to run (default: all stages). Choose from: gds, cap3d, cnn, pct')
     parser.add_argument('--default-net-names', action='store_true',
                        help='Skip DEF→GDS net matching and assign sequential net names (faster).')
     

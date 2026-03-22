@@ -22,8 +22,6 @@ from capbench._internal.common.cap3d_fast_density import (
     RECT_COL_PY_MIN,
     expand_fast_idmaps_cpu,
     expand_fast_idmaps_cuda,
-    rasterize_binary_masks_cpu,
-    rasterize_binary_masks_cuda,
 )
 from capbench._internal.common.tech_parser import get_metal_layers_and_min_widths
 
@@ -103,19 +101,6 @@ class PreparedDefRasterRuntimeInput:
     pixel_resolution: float
     packed_rects_torch: torch.Tensor
     conductor_ids_torch: torch.Tensor
-    active_rectangles: int
-    parse_ms: float
-    prepare_ms: float
-
-
-@dataclass(frozen=True)
-class PreparedDefBinaryMaskRuntimeInput:
-    channel_layers: List[str]
-    target_size: int
-    pixel_resolution: float
-    occupied: torch.Tensor
-    master_masks: torch.Tensor
-    master_conductor_ids_torch: torch.Tensor
     active_rectangles: int
     parse_ms: float
     prepare_ms: float
@@ -384,68 +369,6 @@ def prepare_fast_def_raster_runtime(
         parse_ms=float(prepared["parse_ms"]),
         prepare_ms=float(prepared["prepare_ms"]),
     )
-
-
-def prepare_fast_def_binary_masks_runtime(
-    def_path: Path | str,
-    runtime_config: CompiledDefRuntimeConfig,
-    *,
-    target_size: int = DEFAULT_TARGET_SIZE,
-    pixel_resolution: Optional[float] = None,
-    raster_bounds: Optional[Sequence[float] | np.ndarray] = None,
-    include_supply_nets: bool = False,
-    device: torch.device,
-) -> PreparedDefBinaryMaskRuntimeInput:
-    if device.type != "cuda":
-        raise ValueError(f"prepare_fast_def_binary_masks_runtime requires a CUDA device, got: {device}")
-    prepared = prepare_fast_def_raster_runtime(
-        def_path=def_path,
-        runtime_config=runtime_config,
-        target_size=target_size,
-        pixel_resolution=pixel_resolution,
-        raster_bounds=raster_bounds,
-        include_supply_nets=include_supply_nets,
-    )
-    real_conductor_count = int(prepared.conductor_ids_torch.numel())
-    with record_function("lefdef.prepare.upload_rects"):
-        packed_rects_cuda = prepared.packed_rects_torch.to(
-            device=device,
-            dtype=torch.int32,
-            non_blocking=True,
-        ).contiguous()
-    with record_function("lefdef.prepare.rasterize_binary_masks"):
-        occupied, master_masks = rasterize_binary_masks_cuda(
-            packed_rects_cuda,
-            num_layers=len(prepared.channel_layers),
-            target_size=prepared.target_size,
-            real_conductor_count=real_conductor_count,
-        )
-    return PreparedDefBinaryMaskRuntimeInput(
-        channel_layers=list(prepared.channel_layers),
-        target_size=prepared.target_size,
-        pixel_resolution=prepared.pixel_resolution,
-        occupied=occupied,
-        master_masks=master_masks,
-        master_conductor_ids_torch=prepared.conductor_ids_torch.to(device=device, dtype=torch.int16, non_blocking=True).contiguous(),
-        active_rectangles=prepared.active_rectangles,
-        parse_ms=prepared.parse_ms,
-        prepare_ms=prepared.prepare_ms,
-    )
-
-
-def prepare_fast_def_binary_masks_cpu(
-    prepared: PreparedDefRasterInput,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    real_conductor_ids = np.asarray(prepared.real_conductor_ids_sorted, dtype=np.int16)
-    occupied, master_masks = rasterize_binary_masks_cpu(
-        prepared.packed_rects,
-        num_layers=len(prepared.channel_layers),
-        target_size=prepared.target_size,
-        real_conductor_count=int(real_conductor_ids.shape[0]),
-    )
-    return occupied, master_masks, real_conductor_ids
-
-
 def prepare_fast_def_raster_input(
     def_path: Path | str,
     tech_path: Path | str,
