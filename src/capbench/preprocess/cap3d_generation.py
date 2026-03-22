@@ -857,21 +857,33 @@ class DEF2Cap3D:
 
         print("="*60)
 
+    def _build_writer_layer_maps(self) -> Tuple[Dict[str, Tuple[int, float, float]], Dict[str, Tuple[int, float, float]]]:
+        """Split physical layers into CAP3D interconnect and via maps."""
+        via_names = set(self.tech_data.get('vias', {})) if isinstance(self.tech_data, dict) else set()
+        interconnect_map: Dict[str, Tuple[int, float, float]] = {}
+        via_map: Dict[str, Tuple[int, float, float]] = {}
+
+        for name, entry in self.layer_map.items():
+            target = via_map if name in via_names else interconnect_map
+            target[name] = (entry.gds_layer, entry.z_bottom, entry.z_top)
+
+        return interconnect_map, via_map
+
     def _build_cap3d_layer_ids(self) -> Dict[str, int]:
         """Assign distinct CAP3D layer IDs per physical layer (conductors and vias).
 
         Ground plane uses 0. Conductor and via layers start from 1, ordered by z-height.
         """
         entries: List[Tuple[str, float, float]] = []
+        interconnect_map, via_map = self._build_writer_layer_maps()
 
         # Add metal layers (interconnect layers)
-        for name, entry in self.layer_map.items():
-            entries.append((name, entry.z_bottom, entry.z_top))
+        for name, (_gds_layer, z_bottom, z_top) in interconnect_map.items():
+            entries.append((name, z_bottom, z_top))
 
-        # Add via layers - this was missing in the original code!
-        for name, entry in self.layer_map.items():
-            if name in self.tech_data.get('vias', {}):
-                entries.append((name, entry.z_bottom, entry.z_top))
+        # Add via layers once so layer IDs match the emitted <layer> table.
+        for name, (_gds_layer, z_bottom, z_top) in via_map.items():
+            entries.append((name, z_bottom, z_top))
 
         # Sort by z center (bottom first), tie-break by name for stability
         entries.sort(key=lambda t: (0.5 * (t[1] + t[2]), t[0]))
@@ -894,15 +906,7 @@ class DEF2Cap3D:
         y_max = bbox.top * dbu
 
         cap3d_layer_ids = self._build_cap3d_layer_ids()
-        writer_layer_map = {
-            name: (entry.gds_layer, entry.z_bottom, entry.z_top)
-            for name, entry in self.layer_map.items()
-        }
-        writer_via_map = {
-            name: (entry.gds_layer, entry.z_bottom, entry.z_top)
-            for name, entry in self.layer_map.items()
-            if name in self.tech_data.get('vias', {})
-        }
+        writer_layer_map, writer_via_map = self._build_writer_layer_maps()
         write_cap3d(
             str(self.output_file),
             x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max,

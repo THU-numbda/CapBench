@@ -17,7 +17,10 @@ def _sorted_layer_entries(layer_map: Dict[str, Tuple[int, float, float]],
                           via_map: Dict[str, Tuple[int, float, float]]) -> List[Tuple[str, float, str]]:
     """Build sorted layer entries (name, z_center, type) for CAP3D <layer> section."""
     entries: List[Tuple[str, float, str]] = []
+    via_names = set(via_map)
     for name, (_, z0, z1) in layer_map.items():
+        if name in via_names:
+            continue
         z_center = 0.5 * (z0 + z1)
         entries.append((name, z_center, 'interconnect'))
     for name, (_, z0, z1) in via_map.items():
@@ -102,9 +105,16 @@ def write_cap3d(
             f.write("</plate_medium>\n")
 
         entries = _sorted_layer_entries(layer_map, via_map)
+        dielectric_layer_defs: List[str] = []
+        for i, (name, _, _) in enumerate(dielectric_stack):
+            display_name = name if name and name.strip() else f"PLATE_MEDIUM_{i}"
+            if display_name.upper() == "SUBSTRATE":
+                continue
+            dielectric_layer_defs.append(display_name)
+
         dielectric_start_id = len(entries) + 1
         conformal_layer_ids = {
-            layer_name: dielectric_start_id + len(dielectric_stack) + idx
+            layer_name: dielectric_start_id + len(dielectric_layer_defs) + idx
             for idx, layer_name in enumerate(conformal_layer_names)
         }
 
@@ -205,9 +215,7 @@ def write_cap3d(
             f.write(f"\ttype {ltype}\n")
             f.write("</layer>\n")
 
-        for i, (name, _, _) in enumerate(dielectric_stack):
-            # Fallback to generic name if somehow name is missing
-            display_name = name if name and name.strip() else f"PLATE_MEDIUM_{i}"
+        for i, display_name in enumerate(dielectric_layer_defs):
             f.write("<layer>\n")
             f.write(f"\tname {display_name}\n")
             f.write(f"\tid {dielectric_start_id + i}\n")
