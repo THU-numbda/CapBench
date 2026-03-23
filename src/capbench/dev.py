@@ -8,6 +8,7 @@ from typing import Dict, Sequence
 DEV_TOOL_DESCRIPTIONS: Dict[str, str] = {
     "window-pipeline": "Run the multi-stage CAP3D/density/binary-mask preprocessing pipeline.",
     "window-metadata": "Generate window YAML metadata from design inputs.",
+    "density-explorer": "Launch the experimental real-time moving-window density explorer.",
     "partition-cap3d": "Partition CAP3D files for finer-grained downstream processing.",
     "openrcx": "Run OpenRCX across discovered dataset windows.",
     "rwcap": "Run RWCap across discovered dataset windows.",
@@ -35,6 +36,10 @@ def run_dev_tool(tool_name: str, args: Sequence[str] = ()) -> None:
     if tool_name == "window-metadata":
         from .devtools import window_metadata
         window_metadata.main(cleaned_args)
+        return
+    if tool_name == "density-explorer":
+        from .devtools import density_explorer
+        density_explorer.main(cleaned_args)
         return
     if tool_name == "partition-cap3d":
         from .devtools import partition_cap3d

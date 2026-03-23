@@ -131,7 +131,10 @@ def collect_cap3d_metadata(cap3d_path: Path) -> Cap3DMetadata:
     parser = StreamingCap3DParser(str(cap3d_path), use_fast=False)
     parsed = parser.parse_complete()
 
-    layers_by_index = {idx: layer for idx, layer in enumerate(parsed.layers)}
+    layers_by_index = {
+        int(getattr(layer, "id", idx)): layer
+        for idx, layer in enumerate(parsed.layers)
+    }
     layer_stats: Dict[str, Cap3DLayerStats] = {}
     via_blocks: Dict[str, List] = defaultdict(list)
 

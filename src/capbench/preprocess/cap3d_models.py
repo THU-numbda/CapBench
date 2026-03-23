@@ -91,6 +91,7 @@ class Layer:
     """Layer definition with name and type"""
     name: str
     type: str  # interconnect, via, etc.
+    id: Optional[int] = None
     
 @dataclass
 class PolyElement:

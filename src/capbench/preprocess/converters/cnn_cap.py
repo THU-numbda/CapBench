@@ -118,8 +118,11 @@ class DensityMapGenerator:
             self.x_max = max(self.window.v1[0], self.window.v2[0])
             self.y_max = max(self.window.v1[1], self.window.v2[1])
 
-        # Extract layers - Layer dataclass doesn't have id, so we'll index by position
-        self.layers = {idx: layer for idx, layer in enumerate(parsed_data.layers)}
+        # CAP3D block.layer stores the explicit <layer> id, not the list position.
+        self.layers = {
+            int(getattr(layer, "id", idx)): layer
+            for idx, layer in enumerate(parsed_data.layers)
+        }
 
         # Maintain layer order
         self.layer_order = [layer.name for layer in parsed_data.layers]

@@ -351,7 +351,8 @@ class StreamingCap3DParser:
             # Direct append without function call overhead
             state.pending_layer = Layer(
                 name=state.layer_data['name'],
-                type=state.layer_data['type']
+                type=state.layer_data['type'],
+                id=state.layer_data.get('id'),
             )
             self.stats['layers'] += 1
         state.current_section = None
@@ -551,6 +552,11 @@ class StreamingCap3DParser:
         """Handle layer properties efficiently"""
         if line.startswith('name '):
             state.layer_data['name'] = line[5:].strip()
+        elif line.startswith('id '):
+            try:
+                state.layer_data['id'] = int(float(line[3:].strip()))
+            except Exception:
+                return False
         elif line.startswith('type '):
             state.layer_data['type'] = line[5:].strip()
         elif line in layer_types:

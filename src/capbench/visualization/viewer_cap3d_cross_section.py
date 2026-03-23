@@ -136,7 +136,10 @@ class CrossSectionViewer:
         parsed = parser.parse_complete()
 
         self.blocks = parsed.blocks
-        self.layers = {idx: layer for idx, layer in enumerate(parsed.layers)}
+        self.layers = {
+            int(getattr(layer, "id", idx)): layer
+            for idx, layer in enumerate(parsed.layers)
+        }
 
         # Extract window bounds if available
         if parsed.window:

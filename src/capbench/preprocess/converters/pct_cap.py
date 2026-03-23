@@ -84,8 +84,11 @@ class PointCloudGenerator:
         if parsed_data.window:
             self.window = parsed_data.window
 
-        # Extract layers
-        self.layers = {idx: layer for idx, layer in enumerate(parsed_data.layers)}
+        # CAP3D block.layer stores the explicit <layer> id, not the list position.
+        self.layers = {
+            int(getattr(layer, "id", idx)): layer
+            for idx, layer in enumerate(parsed_data.layers)
+        }
         self.layer_order = [layer.name for layer in parsed_data.layers]
 
         # Extract plate mediums (dielectric layers)
