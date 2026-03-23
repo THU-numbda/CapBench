@@ -12,7 +12,7 @@ Process-specific cuboid_max_length values:
 - sky130hd: 8.0 μm
 
 Usage:
-    from capbench.preprocess.cap3d_partitioner import Cap3DPartitioner
+    from tools.preprocess.cap3d_partitioner import Cap3DPartitioner
 
     partitioner = Cap3DPartitioner(cuboid_max_length=3.0)
     partitioner.partition_file(
@@ -266,7 +266,7 @@ class Cap3DPartitioner:
             True if successful, False otherwise
         """
         # Import here to avoid circular dependency
-        from capbench.preprocess.cap3d_writer import write_parsed_cap3d
+        from tools.preprocess.cap3d_writer import write_parsed_cap3d
 
         input_path = Path(input_path)
         output_path = Path(output_path)

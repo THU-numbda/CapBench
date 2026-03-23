@@ -1,10 +1,8 @@
-"""Cache-backed dataset download and preprocessing helpers."""
+"""Cache-backed dataset download and inspection helpers."""
 
 from __future__ import annotations
 
 import shutil
-import subprocess
-import sys
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -12,24 +10,8 @@ from typing import Any, Dict, Iterable, List, Sequence
 
 from tqdm import tqdm
 
-from .cache import (
-    ARTIFACT_RELATIVE_PATHS,
-    artifact_exists,
-    cache_download_dir,
-    dataset_cache_base,
-    filesystem_created_at,
-    legacy_dataset_cache_base,
-    normalize_artifact_name,
-    read_dataset_state,
-    write_dataset_state,
-)
+from .cache import ARTIFACT_RELATIVE_PATHS, artifact_exists, cache_download_dir, dataset_cache_base, filesystem_created_at, legacy_dataset_cache_base, normalize_artifact_name, read_dataset_state, write_dataset_state
 from .registry import DatasetEntry, DatasetSource, get_dataset_entry, list_dataset_entries
-
-
-DEFAULT_ARTIFACT_STAGES = {
-    "density_maps": "cnn",
-    "point_clouds": "pct",
-}
 
 _DATASET_SIZE_ORDER = {
     "small": 0,
@@ -301,58 +283,6 @@ def _ensure_registered_dataset(entry: DatasetEntry, *, source_name: str | None =
     return workspace_root
 
 
-def _run_pipeline_stage(dataset_root: Path, stage: str) -> None:
-    windows_file = dataset_root / "windows.yaml"
-    if not windows_file.exists():
-        raise RuntimeError(f"Cannot preprocess {stage}: missing {windows_file}")
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "capbench.preprocess.window_processing_pipeline",
-            "--dataset-path",
-            str(dataset_root),
-            "--windows-file",
-            str(windows_file),
-            "--pipeline",
-            stage,
-        ],
-        check=True,
-    )
-
-
-def _ensure_artifacts(entry: DatasetEntry, dataset_root: Path, artifacts: Sequence[str]) -> None:
-    pending = [normalize_artifact_name(artifact) for artifact in artifacts]
-    for artifact in pending:
-        if artifact_exists(dataset_root, artifact):
-            continue
-
-        stage = entry.artifacts.get(artifact)
-        if stage is None:
-            stage = DEFAULT_ARTIFACT_STAGES.get(artifact)
-        if stage is None:
-            raise RuntimeError(
-                f"Artifact '{artifact}' is missing for {entry.dataset_id} and is not configured with a preprocessing stage. "
-                f"Dataset root: {dataset_root}"
-            )
-
-        print(f"Generating missing artifact '{artifact}' with pipeline stage '{stage}'")
-        _run_pipeline_stage(dataset_root, stage)
-        if not artifact_exists(dataset_root, artifact):
-            raise RuntimeError(f"Pipeline stage '{stage}' did not produce required artifact '{artifact}'")
-
-
-def _default_prepare_artifacts(entry: DatasetEntry) -> tuple[str, ...]:
-    configured = {
-        normalize_artifact_name(name)
-        for name, stage in entry.artifacts.items()
-        if stage is not None
-    }
-    if configured:
-        return tuple(sorted(configured))
-    return tuple(sorted(DEFAULT_ARTIFACT_STAGES))
-
-
 def _remove_path(path: Path) -> None:
     if path.is_symlink() or path.is_file():
         path.unlink()
@@ -364,7 +294,7 @@ def _remove_path(path: Path) -> None:
 def _cleanup_dataset_root(entry: DatasetEntry, dataset_root: Path) -> list[Path]:
     removed: list[Path] = []
 
-    for artifact in _default_prepare_artifacts(entry):
+    for artifact in sorted(entry.artifacts):
         artifact_dir = dataset_root / ARTIFACT_RELATIVE_PATHS[artifact]
         if artifact_dir.is_dir():
             try:
@@ -429,16 +359,6 @@ def _require_explicit_dataset_path(dataset_root: Path, *, artifacts: Sequence[st
     return dataset_root
 
 
-def ensure_dataset(dataset: str, *, artifacts: Sequence[str] = (), source: str | None = None) -> Path:
-    entries = _resolve_dataset_entries(dataset)
-    for entry in entries:
-        dataset_root = _ensure_registered_dataset(entry, source_name=source)
-        if artifacts:
-            _ensure_artifacts(entry, dataset_root, artifacts)
-            _update_state(entry, _select_source(entry, source), dataset_root)
-    return _selector_result_root(dataset, entries)
-
-
 def install_dataset(
     dataset: str,
     *,
@@ -450,27 +370,7 @@ def install_dataset(
         removed_paths = _cleanup_dataset_root(entry, dataset_root)
         for removed in removed_paths:
             print(f"Removed stale path: {removed}")
-        artifacts = _default_prepare_artifacts(entry)
-        if artifacts:
-            _ensure_artifacts(entry, dataset_root, artifacts)
         _update_state(entry, _select_source(entry, source), dataset_root)
-    return _selector_result_root(dataset, entries)
-
-
-def prepare_dataset(
-    dataset: str,
-    *,
-    source: str | None = None,
-) -> Path:
-    return install_dataset(dataset, source=source)
-
-
-def preprocess_dataset(dataset: str, *, artifacts: Sequence[str]) -> Path:
-    entries = _resolve_dataset_entries(dataset)
-    for entry in entries:
-        dataset_root = _ensure_registered_dataset(entry)
-        _ensure_artifacts(entry, dataset_root, artifacts)
-        _update_state(entry, entry.preferred_source, dataset_root)
     return _selector_result_root(dataset, entries)
 
 
@@ -484,6 +384,10 @@ def resolve_dataset_path(
         return _require_explicit_dataset_path(candidate.resolve(), artifacts=artifacts)
     entry = get_dataset_entry(str(dataset))
     return _require_registered_dataset(entry, artifacts=artifacts)
+
+
+def get_dataset_infos(selector: str) -> List[Dict[str, Any]]:
+    return [get_dataset_info(entry.dataset_id) for entry in _resolve_dataset_entries(selector)]
 
 
 def get_dataset_info(dataset: str) -> Dict[str, Any]:
@@ -500,7 +404,7 @@ def get_dataset_info(dataset: str) -> Dict[str, Any]:
         "version": entry.version,
         "description": entry.description,
         "process_node": entry.process_node,
-        "artifacts": dict(entry.artifacts),
+        "artifacts": sorted(entry.artifacts),
         "sources": [source.name for source in entry.sources],
         "cache_root": str(cache_base),
         "workspace_root": (str(workspace_root) if workspace_root is not None else None),

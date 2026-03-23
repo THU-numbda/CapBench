@@ -5,14 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "capbench"
 version = "0.2.0"
-description = "CapBench library for cached datasets, standardized dataloaders, visualization, and developer tooling."
+description = "CapBench library for cached datasets, standardized dataloaders, and visualization."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
   { name = "CapBench contributors" }
 ]
 dependencies = [
-  "klayout",
   "numpy>=1.24",
   "PyYAML>=6.0",
   "tqdm>=4.66",
@@ -35,15 +34,19 @@ vis = [
   "vtk>=9.2",
 ]
 dev = [
+  "klayout",
+  "psutil",
   "pyvis",
   "rich",
   "rtree",
 ]
 all = [
   "einops",
+  "klayout",
   "matplotlib>=3.7",
   "medpy",
   "monai",
+  "psutil",
   "ptflops",
   "pytorch-lightning",
   "pyvis",

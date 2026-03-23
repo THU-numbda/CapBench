@@ -19,7 +19,7 @@ Inputs: only a CAP3D file (no ITF or layer mapping required). Layer heights are
 inferred from conductor block Z extents in the CAP3D content.
 
 Usage:
-  python window_tools/cap3d_cross_section.py <cap3d_file> [num_samples] [window_width]
+  python tools/preprocess/cap3d_cross_section.py <cap3d_file> [num_samples] [window_width]
 
 Defaults:
   - num_samples = 100
@@ -481,11 +481,11 @@ def plot_first_n(samples: List[Dict], n: int, out_dir: Optional[str] = None) -> 
 
 def main(argv: List[str]) -> int:
     if len(argv) < 3:
-        print("Usage: python window_tools/cap3d_cross_section.py <cap3d_file> <num_samples> [window_width] [--top <top_k>] [--layermap <layermap_file>] [--tech <tech_file>]")
+        print("Usage: python tools/preprocess/cap3d_cross_section.py <cap3d_file> <num_samples> [window_width] [--top <top_k>] [--layermap <layermap_file>] [--tech <tech_file>]")
         print("Examples:")
-        print("  python window_tools/cap3d_cross_section.py cap3d/output.cap3d 100 5.0")
-        print("  python window_tools/cap3d_cross_section.py cap3d/output.cap3d 100 --top 10")
-        print("  python window_tools/cap3d_cross_section.py cap3d/output.cap3d 100 5.0 --layermap designs/tech/asap7.layermap --tech designs/tech/asap7.yaml")
+        print("  python tools/preprocess/cap3d_cross_section.py cap3d/output.cap3d 100 5.0")
+        print("  python tools/preprocess/cap3d_cross_section.py cap3d/output.cap3d 100 --top 10")
+        print("  python tools/preprocess/cap3d_cross_section.py cap3d/output.cap3d 100 5.0 --layermap designs/tech/asap7.layermap --tech designs/tech/asap7.yaml")
         return 1
 
     cap3d_file = argv[1]

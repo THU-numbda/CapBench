@@ -14,13 +14,13 @@ Features:
 - Non-overlapping window placement
 
 Usage:
-    python generate_windows.py [--windows-per-design N] [--seed SEED] [--output OUTPUT]
+    python -m tools.maintenance.window_metadata [--windows-per-design N] [--seed SEED] [--output OUTPUT]
 
 Examples:
-    python generate_windows.py
-    python generate_windows.py --windows-per-design 50
-    python generate_windows.py --seed 123
-    python generate_windows.py --output /custom/path
+    python -m tools.maintenance.window_metadata
+    python -m tools.maintenance.window_metadata --windows-per-design 50
+    python -m tools.maintenance.window_metadata --seed 123
+    python -m tools.maintenance.window_metadata --output /custom/path
 
 Default: 100 windows per size category per design, 10×10 grid
 """
@@ -36,14 +36,19 @@ from typing import List, Dict, Tuple, Optional, Set
 
 try:
     import yaml
-except ImportError:
-    print("ERROR: PyYAML is required to run generate_windows.py", file=sys.stderr)
-    sys.exit(1)
+except ImportError:  # pragma: no cover - depends on runtime environment
+    yaml = None
 
 # Ensure matplotlib uses a non-interactive backend for headless environments
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 # No external dependencies for core functionality
+
+
+def _require_yaml_module():
+    if yaml is None:
+        raise RuntimeError("PyYAML is required to run tools.maintenance.window_metadata")
+    return yaml
 
 
 class DesignInfo:
@@ -779,8 +784,9 @@ class MultiSizeWindowGenerator:
                 if not yaml_path.exists():
                     continue
                 try:
+                    yaml_module = _require_yaml_module()
                     with yaml_path.open() as fh:
-                        data = yaml.safe_load(fh) or {}
+                        data = yaml_module.safe_load(fh) or {}
                 except Exception:
                     continue
                 for design_entry in data.get('designs', []):
@@ -903,10 +909,10 @@ def main(argv=None):
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python generate_windows.py
-    python generate_windows.py --windows-per-design 50
-    python generate_windows.py --seed 123
-    python generate_windows.py --output /custom/path
+    python -m tools.maintenance.window_metadata
+    python -m tools.maintenance.window_metadata --windows-per-design 50
+    python -m tools.maintenance.window_metadata --seed 123
+    python -m tools.maintenance.window_metadata --output /custom/path
         """
     )
 

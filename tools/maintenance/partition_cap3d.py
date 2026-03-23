@@ -8,13 +8,13 @@ to a one-time preprocessing operation.
 
 Usage:
     # Auto-detect process node from dataset path
-    python scripts/partition_cap3d_dataset.py --dataset-path datasets/nangate45/small
+    python -m tools.maintenance.partition_cap3d --dataset-path datasets/nangate45/small
 
     # Manually specify process node
-    python scripts/partition_cap3d_dataset.py --dataset-path datasets/my_data --process-node nangate45
+    python -m tools.maintenance.partition_cap3d --dataset-path datasets/my_data --process-node nangate45
 
     # Custom cuboid max length
-    python scripts/partition_cap3d_dataset.py --dataset-path datasets/nangate45/small --cuboid-max-length 3.0
+    python -m tools.maintenance.partition_cap3d --dataset-path datasets/nangate45/small --cuboid-max-length 3.0
 
 Process nodes and default cuboid_max_length values:
 - asap7: 0.5 μm
@@ -26,7 +26,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from capbench.preprocess.cap3d_partitioner import (
+from tools.preprocess.cap3d_partitioner import (
     Cap3DPartitioner,
     get_partition_params_for_process_node,
     auto_detect_process_node,

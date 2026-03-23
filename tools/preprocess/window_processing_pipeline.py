@@ -4,16 +4,15 @@ from __future__ import annotations
 CAP3D Window Extraction Tool (KLayout + DEF filtering)
 
 Usage:
-    python3 window_processing_pipeline.py [--gds FILE] [--def FILE] [--windows FILE]
+    python -m tools.preprocess.window_processing_pipeline [--gds FILE] [--def FILE] [--windows FILE]
 
 Or simply:
-    python3 window_processing_pipeline.py  (uses defaults)
+    python -m tools.preprocess.window_processing_pipeline  (uses defaults)
 """
 
 import sys
 import argparse
 import atexit
-import yaml
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, DefaultDict, Set, Any, Sequence
 from collections import defaultdict
@@ -23,21 +22,26 @@ import time
 import gc
 import traceback
 from tqdm import tqdm
-import psutil
+try:
+    import psutil
+except ImportError:  # pragma: no cover - depends on runtime environment
+    psutil = None
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - depends on runtime environment
+    yaml = None
 
 from capbench._internal.klayout_compat import pya, require_pya
 from capbench.preprocess.def_parser import (
     parse_def, filter_components_in_window, filter_nets_in_window, parse_lef_macro_sizes, write_def
 )
-from capbench.preprocess.converters.pct_cap import convert_window as convert_pct_window
-from capbench.preprocess.converters.cnn_cap import convert_window as convert_cnn_window
 from capbench._internal.common.datasets import (
     extract_process_node_from_path,
     find_tech_stack_for_process_node,
     find_layermap_for_process_node,
     get_dataset_subdirs,
 )
-from capbench._internal.common.tech_parser import get_all_layers_with_limit, get_conductor_layers
 from capbench.paths import TECH_ROOT
 
 STAGE_LABELS = {
@@ -75,6 +79,12 @@ def _normalize_layer_key(value: Optional[str]) -> str:
 
 def _normalize_stage_name(stage: str) -> str:
     return STAGE_ALIASES.get(str(stage), str(stage))
+
+
+def _require_yaml_module():
+    if yaml is None:
+        raise RuntimeError("PyYAML is required to run tools.preprocess.window_processing_pipeline")
+    return yaml
 
 class WindowExtractor:
     """Extract windows from GDS+DEF designs using KLayout + DEF filtering"""
@@ -359,6 +369,8 @@ class WindowExtractor:
     def _get_memory_info(self) -> Dict[str, float]:
         """Get current memory usage information"""
         try:
+            if psutil is None:
+                return {'used_gb': 0.0, 'percent': 0.0}
             process = psutil.Process()
             memory_info = process.memory_info()
             return {
@@ -412,9 +424,10 @@ class WindowExtractor:
     def load_multi_design_yaml(self) -> List[Dict[str, Any]]:
         """Parse multi-design YAML file and create global window list"""
         # Loading configuration silently
+        yaml_module = _require_yaml_module()
 
         with self.multi_yaml_file.open() as f:
-            data = yaml.safe_load(f)
+            data = yaml_module.safe_load(f)
 
         # Extract layer limits if present, otherwise use dataset defaults.
         self.layer_limits = data.get('layer_limits') or DEFAULT_LAYER_LIMITS
@@ -675,6 +688,8 @@ class WindowExtractor:
         )
         if not bottom_name or not top_name:
             return None
+
+        from capbench._internal.common.tech_parser import get_conductor_layers
 
         conductor_layers, _ = get_conductor_layers(str(stack_file))
         normalized_layers = [_normalize_layer_key(layer) for layer in conductor_layers]
@@ -1009,8 +1024,9 @@ class WindowExtractor:
             raise FileNotFoundError(f"Layermap file not found: {layermap_file}")
 
         try:
+            yaml_module = _require_yaml_module()
             with stack_file.open() as f:
-                tech_data = yaml.safe_load(f)
+                tech_data = yaml_module.safe_load(f)
         except Exception as e:
             raise ValueError(f"Could not load tech stack YAML {stack_file}: {e}")
 
@@ -1063,6 +1079,8 @@ class WindowExtractor:
             max_layers = self.layer_limits[tech_node]
             try:
                 # Get allowed conductor layers from limited total stack (includes dielectrics)
+                from capbench._internal.common.tech_parser import get_all_layers_with_limit
+
                 _, allowed_conductor_layers, _ = get_all_layers_with_limit(str(stack_file), max_layers)
                 allowed_set = {str(name).lower() for name in allowed_conductor_layers}
   
@@ -1714,7 +1732,7 @@ class WindowExtractor:
             else:
                 # Need to generate CAP3D
                 try:
-                    from capbench.preprocess.cap3d_generation import DEF2Cap3D
+                    from tools.preprocess.cap3d_generation import DEF2Cap3D
 
                     # Create DEF2Cap3D generator with design-specific files
                     layermap_path = window_entry['layermap_file']
@@ -1758,6 +1776,8 @@ class WindowExtractor:
             else:
                 try:
                     print(f"    Converting to PCT: {name}")
+                    from tools.preprocess.converters.pct_cap import convert_window as convert_pct_window
+
                     convert_pct_window(
                         cap3d_path,
                         dataset_dirs=self.dataset_dirs,
@@ -1772,6 +1792,8 @@ class WindowExtractor:
                 print(f"    CAP3D file not found for CNN conversion: {name}: {cap3d_path}")
             else:
                 try:
+                    from tools.preprocess.converters.cnn_cap import convert_window as convert_cnn_window
+
                     convert_cnn_window(
                         cap3d_path,
                         window_entry['stack_file'],
@@ -1958,7 +1980,7 @@ class WindowExtractor:
                     print(f"    Missing clipped GDS/DEF for CAP3D generation: {name}")
                 else:
                     try:
-                        from capbench.preprocess.cap3d_generation import DEF2Cap3D
+                        from tools.preprocess.cap3d_generation import DEF2Cap3D
 
                         layermap_path = layermap_file
                         if layermap_path is None:
@@ -2143,13 +2165,13 @@ def main(argv: Sequence[str] | None = None):
         epilog='''
 Examples:
   # Use dataset path inferred from the windows YAML directory (all stages)
-  python3 window_processing_pipeline.py --windows-file datasets/small/windows.yaml
+  python -m tools.preprocess.window_processing_pipeline --windows-file datasets/small/windows.yaml
 
   # Run only specific pipeline stages
-  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline gds
-  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline cap3d cnn
-  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline pct
-  python3 window_processing_pipeline.py --windows-file designs.yaml --pipeline cnn pct
+  python -m tools.preprocess.window_processing_pipeline --windows-file designs.yaml --pipeline gds
+  python -m tools.preprocess.window_processing_pipeline --windows-file designs.yaml --pipeline cap3d cnn
+  python -m tools.preprocess.window_processing_pipeline --windows-file designs.yaml --pipeline pct
+  python -m tools.preprocess.window_processing_pipeline --windows-file designs.yaml --pipeline cnn pct
         '''
     )
 

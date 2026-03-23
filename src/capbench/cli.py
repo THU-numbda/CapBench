@@ -7,8 +7,7 @@ import json
 from typing import Sequence
 
 from . import __version__
-from .datasets import ensure_dataset, get_dataset_info, install_dataset, list_datasets, preprocess_dataset
-from .dev import list_dev_tools, run_dev_tool
+from .datasets import get_dataset_info, get_dataset_infos, install_dataset, list_datasets
 from .paths import get_cache_dir
 from .visualize import visualize_cap3d, visualize_density, visualize_point_cloud
 
@@ -21,7 +20,7 @@ _DATASET_SIZE_ORDER = {
 
 
 def _dataset_status_rows(info: dict[str, object]) -> list[tuple[str, str]]:
-    artifacts = sorted(dict(info["artifacts"]))
+    artifacts = sorted(str(artifact) for artifact in info["artifacts"])
     status = dict(info["artifact_status"])
     return [
         (
@@ -98,38 +97,25 @@ def _print_dataset_list() -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="capbench",
-        description="CapBench library CLI for cache-backed datasets, dataloaders, visualization, and dev tools.",
+        description="CapBench library CLI for cache-backed datasets, dataloaders, and visualization.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    datasets_parser = subparsers.add_parser("datasets", help="Dataset download, cache, and preprocessing commands.")
+    datasets_parser = subparsers.add_parser("datasets", help="Dataset download and cache inspection commands.")
     datasets_subparsers = datasets_parser.add_subparsers(dest="datasets_command", required=True)
 
     datasets_subparsers.add_parser("list", help="List registered datasets.")
 
-    datasets_info = datasets_subparsers.add_parser("info", help="Show metadata and cache status for one exact dataset id.")
+    datasets_info = datasets_subparsers.add_parser("info", help="Show metadata and cache status for one dataset id or one PDK selector.")
     datasets_info.add_argument("dataset")
-
-    datasets_ensure = datasets_subparsers.add_parser("ensure", help="Download one exact dataset id or an entire PDK into the shared cache.")
-    datasets_ensure.add_argument("dataset")
-    datasets_ensure.add_argument("--artifact", nargs="*", default=(), help="Required artifacts to verify or generate.")
-    datasets_ensure.add_argument("--source", default=None, help="Override the configured dataset source name.")
 
     datasets_install = datasets_subparsers.add_parser(
         "install",
-        aliases=["prepare"],
-        help="Download one exact dataset id or an entire PDK and generate all configured cache artifacts in one step.",
+        help="Download one exact dataset id or an entire PDK into the shared cache.",
     )
     datasets_install.add_argument("dataset")
     datasets_install.add_argument("--source", default=None, help="Override the configured dataset source name.")
-
-    datasets_preprocess = datasets_subparsers.add_parser(
-        "preprocess",
-        help="Generate missing cache artifacts for one exact dataset id or an entire PDK.",
-    )
-    datasets_preprocess.add_argument("dataset")
-    datasets_preprocess.add_argument("--artifact", nargs="+", required=True, help="Artifacts to generate.")
 
     visualize_parser = subparsers.add_parser("visualize", help="Visualization commands for cached artifacts.")
     visualize_subparsers = visualize_parser.add_subparsers(dest="visualize_command", required=True)
@@ -149,13 +135,6 @@ def _build_parser() -> argparse.ArgumentParser:
     cap3d_parser.add_argument("--window", required=True, help="Window id, for example W0.")
     cap3d_parser.add_argument("viewer_args", nargs=argparse.REMAINDER, help="Extra args passed through to the viewer.")
 
-    dev_parser = subparsers.add_parser("dev", help="Developer-only dataset authoring and maintenance tools.")
-    dev_subparsers = dev_parser.add_subparsers(dest="dev_command", required=True)
-    dev_subparsers.add_parser("list", help="List developer-only tools.")
-    for tool_name, description in list_dev_tools().items():
-        tool_parser = dev_subparsers.add_parser(tool_name, help=description)
-        tool_parser.add_argument("tool_args", nargs=argparse.REMAINDER, help="Arguments passed through to the selected dev tool.")
-
     return parser
 
 
@@ -168,23 +147,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_dataset_list()
             return 0
         if args.datasets_command == "info":
-            print(json.dumps(get_dataset_info(args.dataset), indent=2, sort_keys=True))
+            infos = get_dataset_infos(args.dataset)
+            payload: object = infos[0] if len(infos) == 1 else infos
+            print(json.dumps(payload, indent=2, sort_keys=True))
             return 0
-        if args.datasets_command == "ensure":
-            path = ensure_dataset(args.dataset, artifacts=args.artifact, source=args.source)
-            print(path)
-            return 0
-        if args.datasets_command in {"install", "prepare"}:
+        if args.datasets_command == "install":
             path = install_dataset(
                 args.dataset,
                 source=args.source,
             )
-            info = get_dataset_info(args.dataset)
-            _print_dataset_status(info)
-            print(path)
-            return 0
-        if args.datasets_command == "preprocess":
-            path = preprocess_dataset(args.dataset, artifacts=args.artifact)
+            for info in get_dataset_infos(args.dataset):
+                _print_dataset_status(info)
             print(path)
             return 0
 
@@ -198,14 +171,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.visualize_command == "cap3d":
             visualize_cap3d(args.dataset, window_id=args.window, extra_args=args.viewer_args)
             return 0
-
-    if args.command == "dev":
-        if args.dev_command == "list":
-            for name, description in list_dev_tools().items():
-                print(f"- {name}: {description}")
-            return 0
-        run_dev_tool(args.dev_command, args.tool_args)
-        return 0
 
     parser.error("Unhandled command")
     return 2

@@ -6,12 +6,10 @@ from importlib.metadata import PackageNotFoundError, version
 
 from .cache import get_cache_dir
 from .datasets import (
-    ensure_dataset,
     get_dataset_info,
+    get_dataset_infos,
     install_dataset,
     list_datasets,
-    prepare_dataset,
-    preprocess_dataset,
     resolve_dataset_path,
 )
 
@@ -22,12 +20,10 @@ except PackageNotFoundError:  # pragma: no cover - local source tree fallback
 
 __all__ = [
     "__version__",
-    "ensure_dataset",
     "get_cache_dir",
     "get_dataset_info",
+    "get_dataset_infos",
     "install_dataset",
     "list_datasets",
-    "prepare_dataset",
-    "preprocess_dataset",
     "resolve_dataset_path",
 ]

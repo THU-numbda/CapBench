@@ -4,10 +4,10 @@ from __future__ import annotations
 Convert DEF+GDS to CAP3D format, preserving DEF net names.
 
 USAGE:
-    klayout -b -zz -r window_tools/cap3d_generation.py -- [OPTIONS]
+    klayout -b -zz -r tools/preprocess/cap3d_generation.py -- [OPTIONS]
 
     Or run with defaults:
-    klayout -b -zz -r window_tools/cap3d_generation.py
+    klayout -b -zz -r tools/preprocess/cap3d_generation.py
 
 OPTIONS:
     --gds FILE       GDS layout file (default: ../designs/gds/gcd.gds)
@@ -17,7 +17,7 @@ OPTIONS:
     -o/--output FILE Output cap3d file (default: ../designs/cap3d/gcd.cap3d)
 
 EXAMPLE:
-    klayout -b -zz -r window_tools/cap3d_generation.py -- --gds design.gds --def design.def -o output.cap3d
+    klayout -b -zz -r tools/preprocess/cap3d_generation.py -- --gds design.gds --def design.def -o output.cap3d
 """
 
 import argparse
@@ -31,8 +31,8 @@ from typing import Dict, List, Tuple, Set, Optional, DefaultDict
 
 from capbench._internal.klayout_compat import pya, require_pya
 from capbench._internal.common.net_names import Cap3DNetNameSanitizer
-from capbench.preprocess.cap3d_writer import write_cap3d
 from capbench.preprocess.def_parser import parse_def
+from tools.preprocess.cap3d_writer import write_cap3d
 
 @dataclass
 class LayerEntry:
