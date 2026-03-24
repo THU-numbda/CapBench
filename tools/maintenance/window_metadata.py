@@ -3,13 +3,12 @@
 Enhanced Window Generation Script
 
 Creates non-overlapping small, medium, and large windows for IC designs.
-Generates windows for all three sizes simultaneously with integrated visualization.
+Generates windows for all three sizes simultaneously.
 
 Features:
 - 10×10 grid-based placement with random positioning within tiles
 - Automatic design discovery from designs directory
 - Automatic directory structure creation (datasets/{tech_node}/{size}/)
-- Integrated visualization with PNG output
 - Single script execution for all window sizes
 - Non-overlapping window placement
 
@@ -30,7 +29,6 @@ import math
 import random
 import sys
 import re
-import os
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Set
 
@@ -38,9 +36,6 @@ try:
     import yaml
 except ImportError:  # pragma: no cover - depends on runtime environment
     yaml = None
-
-# Ensure matplotlib uses a non-interactive backend for headless environments
-os.environ.setdefault("MPLBACKEND", "Agg")
 
 # No external dependencies for core functionality
 
@@ -109,13 +104,6 @@ class MultiSizeWindowGenerator:
                 'asap7': (5.0, 5.0),     
                 'sky130hd': (20.0, 20.0), 
             }
-        }
-
-        # Window colors for visualization
-        self.window_colors = {
-            'small': (255, 100, 100, 128),    # Red, semi-transparent
-            'medium': (100, 255, 100, 128),   # Green, semi-transparent
-            'large': (100, 100, 255, 128),    # Blue, semi-transparent
         }
 
     def discover_designs(self) -> List[DesignInfo]:
@@ -408,125 +396,6 @@ class MultiSizeWindowGenerator:
             return None
         return (window_area / design_area) * 100.0
 
-    def _get_original_design_bounds(self, design: DesignInfo) -> Optional[Tuple[float, float, float, float]]:
-        """Get original design bounds without margin for visualization"""
-        if design.total_bounds:
-            return design.total_bounds
-
-        try:
-            with open(design.def_file, 'r') as f:
-                content = f.read()
-
-            # Extract units from DEF file
-            units_match = re.search(r'UNITS\s+DISTANCE\s+MICRONS\s+(\d+)', content)
-            units_per_micron = int(units_match.group(1)) if units_match else 1000
-
-            # Look for DIEAREA statement
-            diearea_match = re.search(r'DIEAREA\s*\(\s*([\d.-]+)\s+([\d.-]+)\s*\)\s*\(\s*([\d.-]+)\s+([\d.-]+)\s*\)', content)
-
-            if diearea_match:
-                x1, y1, x2, y2 = map(float, diearea_match.groups())
-                # Convert from DEF units to micrometers
-                x1, y1, x2, y2 = x1/units_per_micron, y1/units_per_micron, x2/units_per_micron, y2/units_per_micron
-                design.total_bounds = (x1, y1, x2, y2)
-                return design.total_bounds
-
-        except Exception:
-            pass
-
-        return None
-
-    def _generate_visualization(self, design: DesignInfo, windows_by_size: Dict[str, List[Dict]]):
-        """Generate visualization showing both total and usable areas"""
-        try:
-            import matplotlib.pyplot as plt
-            import matplotlib.patches as patches
-        except ImportError:
-            return
-
-        try:
-            fig, ax = plt.subplots(1, 1, figsize=(14, 10))
-
-            # Get original design bounds (without margin)
-            original_bounds = self._get_original_design_bounds(design)
-            usable_bounds = design.bounds
-
-            # Plot total design area (original bounds)
-            if original_bounds:
-                ox1, oy1, ox2, oy2 = original_bounds
-                total_rect = patches.Rectangle((ox1, oy1), ox2-ox1, oy2-oy1,
-                                              linewidth=2, edgecolor='black',
-                                              facecolor='lightgray', alpha=0.2,
-                                              label='Total Design Area')
-                ax.add_patch(total_rect)
-
-            # Plot usable area (with 10% margin)
-            if usable_bounds and original_bounds:
-                ux1, uy1, ux2, uy2 = usable_bounds
-                usable_rect = patches.Rectangle((ux1, uy1), ux2-ux1, uy2-uy1,
-                                               linewidth=2, edgecolor='darkgray',
-                                               facecolor='lightblue', alpha=0.2,
-                                               label='Usable Area (10% margin)')
-                ax.add_patch(usable_rect)
-
-            # Plot windows for each size category
-            colors = {'small': 'red', 'medium': 'green', 'large': 'blue'}
-
-            for size_category, windows in windows_by_size.items():
-                for window in windows:
-                    rect = patches.Rectangle(
-                        (window['x1'], window['y1']),
-                        window['width'],
-                        window['height'],
-                        linewidth=1,
-                        edgecolor=colors[size_category],
-                        facecolor=colors[size_category],
-                        alpha=0.6
-                    )
-                    ax.add_patch(rect)
-
-            # Set plot properties
-            ax.set_xlabel('X (μm)', fontsize=12)
-            ax.set_ylabel('Y (μm)', fontsize=12)
-            ax.set_title(f'{design.full_name} - Window Placement Visualization\n' +
-                        f'Red: Small, Green: Medium, Blue: Large', fontsize=14)
-            ax.set_aspect('equal')
-            ax.grid(True, alpha=0.3)
-
-            # Set axis limits to total design bounds
-            if original_bounds:
-                margin = (ox2 - ox1) * 0.02  # 2% margin for visualization
-                ax.set_xlim(ox1 - margin, ox2 + margin)
-                ax.set_ylim(oy1 - margin, oy2 + margin)
-
-            # Add legend
-            legend_elements = []
-            if original_bounds:
-                legend_elements.append(patches.Patch(color='lightgray', alpha=0.2,
-                                                  label='Total Design Area'))
-            if usable_bounds:
-                legend_elements.append(patches.Patch(color='lightblue', alpha=0.2,
-                                                  label='Usable Area (10% margin)'))
-
-            for size_category, windows in windows_by_size.items():
-                if windows:
-                    count = len(windows)
-                    legend_elements.append(
-                        patches.Patch(color=colors[size_category], alpha=0.6,
-                                     label=f'{size_category.title()} ({count} windows)')
-                    )
-
-            ax.legend(handles=legend_elements, loc='upper right', fontsize=10)
-
-            # Save as PNG
-            png_file = self.base_path / "_plots" / f"{design.full_name}_windows.png"
-            png_file.parent.mkdir(parents=True, exist_ok=True)
-            plt.savefig(png_file, dpi=150, bbox_inches='tight')
-            plt.close()
-
-        except Exception:
-            pass  # Silently skip visualization errors
-
     def _calculate_optimal_grid_size(self, design: DesignInfo) -> Tuple[int, int]:
         """Calculate optimal grid size and window count for 9-window structure"""
         if not design.bounds:
@@ -735,7 +604,6 @@ class MultiSizeWindowGenerator:
                 windows_by_size = self.generate_windows_for_design(design)
                 if windows_by_size:
                     designs_with_windows.append((design, windows_by_size))
-                    self._generate_visualization(design, windows_by_size)
 
             if windows_by_size:
                 small_count = len(windows_by_size['small'])
