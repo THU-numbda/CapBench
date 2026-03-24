@@ -21,7 +21,7 @@ Examples:
     python -m tools.maintenance.window_metadata --seed 123
     python -m tools.maintenance.window_metadata --output /custom/path
 
-Default: 100 windows per size category per design, 10×10 grid
+Default: geometry-driven placement capped at 32×32 tiles per design
 """
 
 import argparse
@@ -44,6 +44,14 @@ def _require_yaml_module():
     if yaml is None:
         raise RuntimeError("PyYAML is required to run tools.maintenance.window_metadata")
     return yaml
+
+
+DEFAULT_MAX_GRID_SIZE = 32
+WINDOWS_PER_TILE_BY_SIZE = {
+    'small': 4,
+    'medium': 4,
+    'large': 1,
+}
 
 
 class DesignInfo:
@@ -69,9 +77,13 @@ class MultiSizeWindowGenerator:
         seed: int = 42,
         output_path: str | None = None,
         designs_root: str | None = None,
+        max_grid_size: int = DEFAULT_MAX_GRID_SIZE,
+        fresh_generation: bool = False,
     ):
         self.windows_per_design = windows_per_design
         self.seed = seed
+        self.max_grid_size = max(1, int(max_grid_size))
+        self.fresh_generation = fresh_generation
 
         self.repo_root = Path.cwd().resolve()
         self.designs_root = Path(designs_root).resolve() if designs_root else self.repo_root / "designs"
@@ -164,6 +176,29 @@ class MultiSizeWindowGenerator:
             pass
 
         return None, None
+
+    def _max_windows_for_size(self, size_category: str) -> int:
+        windows_per_tile = WINDOWS_PER_TILE_BY_SIZE.get(size_category, 1)
+        return (self.max_grid_size ** 2) * windows_per_tile
+
+    def _cap_windows_for_design(
+        self,
+        windows_by_size: Dict[str, List[Dict]],
+        design_name: str,
+        source: str,
+    ) -> Dict[str, List[Dict]]:
+        capped: Dict[str, List[Dict]] = {}
+        for size_category in self.size_categories:
+            windows = list(windows_by_size.get(size_category, []))
+            max_windows = self._max_windows_for_size(size_category)
+            if len(windows) > max_windows:
+                print(
+                    f"   {design_name}: truncating {size_category} windows from "
+                    f"{len(windows)} to {max_windows} ({source}, max grid {self.max_grid_size}x{self.max_grid_size})"
+                )
+                windows = windows[:max_windows]
+            capped[size_category] = windows
+        return capped
 
     def _create_grid_tiles(self, bounds: Tuple[float, float, float, float], grid_size: int) -> List[Tuple[float, float, float, float]]:
         """Create grid tiles for the design area using the specified grid size"""
@@ -263,7 +298,7 @@ class MultiSizeWindowGenerator:
                     all_windows[window['size_category']].append(window)
                 used_tiles += 1
 
-        return all_windows
+        return self._cap_windows_for_design(all_windows, design.full_name, source="generated")
 
 
     def create_directory_structure(self, designs: List[DesignInfo]):
@@ -312,7 +347,9 @@ class MultiSizeWindowGenerator:
                 if not new_entries:
                     continue
 
-                existing_map = self.existing_windows.get(tech_node, {}).get(size_category, {})
+                existing_map = {}
+                if not self.fresh_generation:
+                    existing_map = self.existing_windows.get(tech_node, {}).get(size_category, {})
                 ordered_entries = self._merge_preserving_order(existing_map, new_entries)
                 total_windows = sum(len(entry['windows']) for entry in ordered_entries)
 
@@ -434,6 +471,7 @@ class MultiSizeWindowGenerator:
             grid_size = min_square_root
         else:
             grid_size = max_square_root
+        grid_size = min(grid_size, self.max_grid_size)
         optimal_tiles = grid_size ** 2
 
         return grid_size, optimal_tiles
@@ -571,12 +609,14 @@ class MultiSizeWindowGenerator:
     def run(self) -> bool:
         """Main execution function"""
         # Discover designs
-        self.existing_windows = self._load_existing_windows()
+        self.existing_windows = {} if self.fresh_generation else self._load_existing_windows()
         designs = self.discover_designs()
         if not designs:
             return False
 
         print(f"[*] Processing {len(designs)} designs...")
+        if self.fresh_generation:
+            print(f"[*] Fresh generation enabled: overwriting existing windows.yaml contents")
 
         # Pre-calculate optimal window counts for all designs
         design_counts = {}
@@ -597,7 +637,7 @@ class MultiSizeWindowGenerator:
         summary_rows: List[Dict[str, object]] = []
 
         for design in designs:
-            is_existing = self._design_has_existing_windows(design)
+            is_existing = False if self.fresh_generation else self._design_has_existing_windows(design)
             if is_existing:
                 windows_by_size = self._get_existing_windows(design)
             else:
@@ -680,7 +720,7 @@ class MultiSizeWindowGenerator:
                 reused[size] = [dict(window) for window in entry.get('windows', [])]
             else:
                 reused[size] = []
-        return reused
+        return self._cap_windows_for_design(reused, design.full_name, source="existing")
 
     @staticmethod
     def _merge_preserving_order(existing_map: Dict[str, Dict], new_entries: List[Dict]) -> List[Dict]:
@@ -788,7 +828,7 @@ Examples:
         '--windows-per-design',
         type=int,
         default=100,
-        help='Number of windows to generate per size category per design (default: 100)'
+        help='Fallback tile count used only when DEF bounds are unavailable (default: 100)'
     )
 
     parser.add_argument(
@@ -810,6 +850,19 @@ Examples:
         help='Directory containing gds/ and def/ source design trees (default: ./designs)'
     )
 
+    parser.add_argument(
+        '--max-grid-size',
+        type=int,
+        default=DEFAULT_MAX_GRID_SIZE,
+        help='Hard cap on the placement tile grid edge length (default: 32, meaning at most 32x32 tiles)'
+    )
+
+    parser.add_argument(
+        '--fresh',
+        action='store_true',
+        help='Ignore existing windows.yaml files and regenerate fresh capped metadata'
+    )
+
     args = parser.parse_args(argv)
 
     # Create generator and run
@@ -818,6 +871,8 @@ Examples:
         seed=args.seed,
         output_path=args.output,
         designs_root=args.designs_root,
+        max_grid_size=args.max_grid_size,
+        fresh_generation=args.fresh,
     )
 
     success = generator.run()
