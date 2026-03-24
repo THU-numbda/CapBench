@@ -114,12 +114,13 @@ Developer-only flows live under the repo-local `tools/` namespace and are not pa
 python -m tools.preprocess.window_processing_pipeline --windows-file /abs/path/windows.yaml --dataset-path /abs/path/dataset --pipeline cnn
 python -m tools.maintenance.partition_cap3d --dataset-path /abs/path/dataset
 python -m tools.maintenance.openrcx --process-nodes nangate45 --sizes small
-python -m tools.maintenance.rwcap --process-nodes nangate45 --sizes small
+python -m tools.maintenance.rwcap --rwcap-bin /abs/path/to/rwcap --process-nodes nangate45 --sizes small --jobs 8
 python -m tools.maintenance.window_metadata --help
 python -m tools.maintenance.density_explorer --cap3d /abs/path/window.cap3d
 ```
 
 These tools remain available for dataset authoring and maintenance, but they are not the default user workflow. Run them from the repository root.
+`tools.maintenance.rwcap` scans the shared CapBench dataset cache by default and writes `out_rwcap/` under each cached dataset split.
 
 ## Python API
 

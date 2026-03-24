@@ -24,6 +24,7 @@ import argparse
 import datetime as _dt
 import math
 import re
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
@@ -196,7 +197,7 @@ def build_name_map(nets: Iterable[str]) -> List[str]:
 
 DEFAULT_DROP_NETS: Set[str] = set()
 DEFAULT_THRESHOLD_F = 0.0
-DEFAULT_COUPLING_THRESHOLD_RATIO = 0.01  # 1% of self capacitance by default
+DEFAULT_COUPLING_THRESHOLD_RATIO = 0.005  # 0.5% of either endpoint self capacitance by default
 DEFAULT_DESIGN_NAME = "design"
 
 
@@ -205,12 +206,12 @@ def filter_couplings_by_threshold(
     self_cap_f: Dict[str, float],
     coupling_threshold_ratio: float,
 ) -> Tuple[Dict[Tuple[str, str], float], int, int]:
-    """Return couplings that clear the threshold plus removal stats.
+    """Return couplings that clear the threshold on at least one endpoint.
 
     Returns:
         filtered: dictionary with surviving couplings
         removed_count: couplings dropped for falling below the threshold
-        considered_count: couplings that had sufficient self capacitance data to evaluate
+        considered_count: couplings that had enough self capacitance data to evaluate
     """
 
     filtered: Dict[Tuple[str, str], float] = {}
@@ -221,16 +222,16 @@ def filter_couplings_by_threshold(
         self_cap_i = abs(self_cap_f.get(i, 0.0))
         self_cap_j = abs(self_cap_f.get(j, 0.0))
 
-        # Skip if either net has zero self capacitance to avoid division by zero
-        if self_cap_i == 0.0 or self_cap_j == 0.0:
+        # Skip only when neither endpoint has self-capacitance data.
+        if self_cap_i == 0.0 and self_cap_j == 0.0:
             continue
 
         considered_count += 1
 
-        threshold_i = self_cap_i * coupling_threshold_ratio
-        threshold_j = self_cap_j * coupling_threshold_ratio
+        keep_i = self_cap_i > 0.0 and c >= self_cap_i * coupling_threshold_ratio
+        keep_j = self_cap_j > 0.0 and c >= self_cap_j * coupling_threshold_ratio
 
-        if c >= threshold_i and c >= threshold_j:
+        if keep_i or keep_j:
             filtered[(i, j)] = c
         else:
             removed_count += 1
@@ -457,7 +458,7 @@ def convert_single_file_block(
         input_path: Path to _block.txt file
         output_dir: Directory for output SPEF file
         threshold_f: Minimum absolute capacitance threshold (F)
-        coupling_threshold_ratio: Skip couplings below this ratio of self capacitance
+        coupling_threshold_ratio: Keep couplings at or above this ratio of either endpoint self capacitance
         design_name: Optional design name for SPEF header
     
     Returns:
@@ -490,7 +491,7 @@ def convert_single_file_block(
     if not blocks:
         raise ValueError(f"No blocks with capacitance data found in {input_path}")
 
-    # Apply coupling threshold filtering
+    # Apply coupling threshold filtering against either endpoint.
     filtered_coupling_f: Dict[Tuple[int, int], float] = {}
     removed_count = 0
     considered_count = 0
@@ -499,15 +500,15 @@ def convert_single_file_block(
         self_cap_i = abs(self_cap_f.get(i, 0.0))
         self_cap_j = abs(self_cap_f.get(j, 0.0))
 
-        # Skip if either block has zero self capacitance
-        if self_cap_i == 0.0 or self_cap_j == 0.0:
+        # Skip only when neither endpoint has self-capacitance data.
+        if self_cap_i == 0.0 and self_cap_j == 0.0:
             continue
 
         considered_count += 1
-        threshold_i = self_cap_i * coupling_threshold_ratio
-        threshold_j = self_cap_j * coupling_threshold_ratio
+        keep_i = self_cap_i > 0.0 and c >= self_cap_i * coupling_threshold_ratio
+        keep_j = self_cap_j > 0.0 and c >= self_cap_j * coupling_threshold_ratio
 
-        if c >= threshold_i and c >= threshold_j:
+        if keep_i or keep_j:
             filtered_coupling_f[(i, j)] = c
         else:
             removed_count += 1
@@ -646,7 +647,7 @@ def convert_directory(
         input_dir: Directory containing RWCap output files
         output_dir: Directory for output SPEF files
         mode: 'net' for .out files (net-level), 'block' for _block.txt files (block-level)
-        coupling_threshold_ratio: Skip couplings below this ratio of self capacitance
+        coupling_threshold_ratio: Keep couplings at or above this ratio of either endpoint self capacitance
     
     Returns:
         Exit code (0 for success, non-zero for errors)
@@ -695,7 +696,7 @@ def convert_directory(
                     f"[rwcap_to_spef] {result['window_id']}.spef: "
                     f"{result['blocks_with_data']} blocks, "
                     f"retained {retained_count:,} couplings, "
-                    f"removed {removed_count:,} below {coupling_threshold_ratio:.1%} threshold"
+                    f"removed {removed_count:,} below the {coupling_threshold_ratio:.1%} either-end threshold"
                 )
 
             except Exception as exc:
@@ -743,7 +744,7 @@ def convert_directory(
                 )
 
                 tqdm.write(
-                    f"[rwcap_to_spef] {result['window_id']}.spef: Retained {retained_count:,} coupling capacitances, removed {removed_count:,} below the {coupling_threshold_ratio:.1%} threshold"
+                    f"[rwcap_to_spef] {result['window_id']}.spef: Retained {retained_count:,} coupling capacitances, removed {removed_count:,} below the {coupling_threshold_ratio:.1%} either-end threshold"
                 )
 
             except Exception as exc:
@@ -780,7 +781,7 @@ def convert_directory(
     print(f"[rwcap_to_spef] Converted {len(rwcap_files)} {mode_desc} files into {output_dir}")
     if total_retained_couplings or total_removed_couplings:
         print(
-            f"[rwcap_to_spef] Coupling summary: {total_retained_couplings:,} retained / {total_removed_couplings:,} removed across {len(rwcap_files)} files ({coupling_threshold_ratio:.1%} threshold)"
+            f"[rwcap_to_spef] Coupling summary: {total_retained_couplings:,} retained / {total_removed_couplings:,} removed across {len(rwcap_files)} files ({coupling_threshold_ratio:.1%} either-end threshold)"
         )
 
     return 0
@@ -796,10 +797,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         epilog="""
 Examples:
   # Convert net-level .out files (default)
-  python rwcap_to_spef.py out_rwcap labels_rwcap
+  PYTHONPATH=src python -m capbench.formats.spef.rwcap_to_spef out_rwcap labels_rwcap
 
   # Convert block-level _block.txt files
-  python rwcap_to_spef.py out_rwcap labels_rwcap_block --mode block
+  PYTHONPATH=src python -m capbench.formats.spef.rwcap_to_spef out_rwcap labels_rwcap_block --mode block
 """
     )
     parser.add_argument("rwcap_dir", help="Directory containing RWCap output files")
@@ -815,7 +816,10 @@ Examples:
         "--coupling-threshold",
         type=float,
         default=DEFAULT_COUPLING_THRESHOLD_RATIO,
-        help=f"Skip coupling capacitances below this percentage of self capacitance (default: {DEFAULT_COUPLING_THRESHOLD_RATIO * 100:.1f}%%)",
+        help=(
+            "Keep coupling capacitances that are at or above this percentage of either "
+            f"endpoint self capacitance (default: {DEFAULT_COUPLING_THRESHOLD_RATIO * 100:.1f}%%)"
+        ),
     )
 
     args = parser.parse_args(argv)
