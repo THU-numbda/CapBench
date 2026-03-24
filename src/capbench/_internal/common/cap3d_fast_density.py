@@ -137,12 +137,6 @@ def parse_cap3d_compact(cap3d_path: Path | str) -> Dict[str, object]:
     return dict(result)
 
 
-def _is_via_layer(layer_name: str, layer_type: str) -> bool:
-    lname = layer_name.strip().lower()
-    ltype = layer_type.strip().lower()
-    return lname.startswith("via") or "via" in ltype
-
-
 def _compute_window_bounds_from_compact(compact: Dict[str, object]) -> Tuple[np.ndarray, np.float32, np.float32]:
     if not bool(compact["has_window"]):
         raise ValueError("CAP3D file is missing required <window> bounds.")
@@ -177,7 +171,6 @@ def prepare_fast_raster_input(
     block_y_min = np.asarray(compact["block_y_min"].numpy(), dtype=np.float32)
     block_y_max = np.asarray(compact["block_y_max"].numpy(), dtype=np.float32)
     layer_names = [str(name) for name in list(compact["layer_names"])]
-    layer_types = [str(name) for name in list(compact["layer_types"])]
     conductor_names = [str(name) for name in list(compact["conductor_names"])]
 
     bounds, x_min, y_min = _compute_window_bounds_from_compact(compact)
@@ -194,15 +187,8 @@ def prepare_fast_raster_input(
     valid_layer_mask = (block_layer_idx >= 0) & (block_layer_idx < len(layer_names))
     used_layer_ids = sorted({int(layer_id) for layer_id in block_layer_idx[valid_layer_mask].tolist()})
 
-    channel_layer_ids: List[int] = []
-    channel_layers: List[str] = []
-    for layer_id in used_layer_ids:
-        layer_name = layer_names[layer_id]
-        layer_type = layer_types[layer_id] if layer_id < len(layer_types) else ""
-        if _is_via_layer(layer_name, layer_type):
-            continue
-        channel_layer_ids.append(layer_id)
-        channel_layers.append(layer_name)
+    channel_layer_ids = list(used_layer_ids)
+    channel_layers = [layer_names[layer_id] for layer_id in channel_layer_ids]
 
     layer_id_to_channel = {layer_id: channel for channel, layer_id in enumerate(channel_layer_ids)}
     block_layer_channel = np.full(block_layer_idx.shape, -1, dtype=np.int32)

@@ -33,12 +33,6 @@ from capbench._internal.common.datasets import (
     LABELS_RWCAP_DIR,
 )
 
-def _is_via_layer(layer_name: str) -> bool:
-    """Treat VIA layers as non-trainable channels and skip them entirely."""
-    upper = layer_name.upper()
-    return "VIA" in upper
-
-
 @dataclass
 class _WindowData:
     name: str
@@ -181,11 +175,7 @@ class WindowCapDataset(Dataset):
             raise ValueError("build_workers must be >= 0")
         self._build_workers = build_workers if build_workers > 0 else max(1, os.cpu_count() or 1)
 
-        if required_layers:
-            filtered_required = [str(layer) for layer in required_layers if not _is_via_layer(str(layer))]
-            self._required_layers_override = filtered_required or None
-        else:
-            self._required_layers_override = None
+        self._required_layers_override = [str(layer) for layer in required_layers] if required_layers else None
 
         if window_ids is None:
             window_ids = sorted(p.stem for p in self.window_dir.glob("*.npz"))
@@ -611,14 +601,12 @@ class WindowCapDataset(Dataset):
             densities: List[np.ndarray] = []
             id_maps: List[np.ndarray] = []
             for layer in raw_layers:
-                if _is_via_layer(layer):
-                    continue
                 layer_names.append(layer)
                 densities.append(data[f"{layer}_img"].astype(np.float32, copy=False))
                 id_maps.append(data[f"{layer}_idx"].astype(np.int32, copy=False))
 
             if not layer_names:
-                raise ValueError(f"Window {npz_path.stem} has no non-VIA layers")
+                raise ValueError(f"Window {npz_path.stem} has no layers")
 
             conductor_ids: Dict[str, int] = {}
             if "conductor_names" in data and "conductor_ids" in data:

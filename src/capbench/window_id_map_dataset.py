@@ -19,7 +19,6 @@ from capbench._internal.common.datasets import DENSITY_MAPS_DIR
 from .window_density_dataset import (
     WindowCapDataset,
     _WindowData,
-    _is_via_layer,
 )
 
 
@@ -110,15 +109,12 @@ class IdMapWindowDataset(WindowCapDataset):
             id_maps: List[np.ndarray] = []
 
             for layer in raw_layers:
-                if _is_via_layer(layer):
-                    continue
-
                 id_map = data[f"{layer}_idx"].astype(np.int32, copy=False)
                 layer_names.append(layer)
                 id_maps.append(id_map)
 
             if not layer_names:
-                raise ValueError(f"Window {npz_path.stem} has no non-VIA layers")
+                raise ValueError(f"Window {npz_path.stem} has no layers")
 
             if self._trim_margin:
                 id_maps = self._trim_and_resize_id_maps(id_maps)
