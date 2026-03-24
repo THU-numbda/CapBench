@@ -61,6 +61,11 @@ STAGE_ALIASES = {
 }
 
 DEFAULT_LAYER_LIMITS = {
+    'asap7': {
+        'small': {'bottom': 'M1', 'top': 'M7'},
+        'medium': {'bottom': 'M1', 'top': 'M9'},
+        'large': {'bottom': 'M1', 'top': 'M9'},
+    },
     'nangate45': {
         'small': {'bottom': 'metal1', 'top': 'metal4'},
         'medium': {'bottom': 'metal1', 'top': 'metal7'},
