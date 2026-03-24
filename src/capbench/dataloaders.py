@@ -68,6 +68,4 @@ def load_density_id_window_dataset(
         highlight_scale=highlight_scale,
         solver_preference=solver_preference,
         build_workers=build_workers,
-        trim_margin=True,
     )
-

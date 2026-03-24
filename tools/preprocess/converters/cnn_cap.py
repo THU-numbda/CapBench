@@ -22,6 +22,7 @@ NPZ File Structure:
         conductor_names:  object array mapping index → conductor name
         conductor_ids:    int32 array mapping index → conductor ID
         window_bounds:    [x_min, y_min, z_min, x_max, y_max, z_max]
+        source_window_bounds: original CAP3D window bounds before conductor-tight rasterization
         pixel_resolution: microns per pixel
 """
 
@@ -88,6 +89,8 @@ class DensityMapGenerator:
         self.y_max: float = 0.0
         self.width_pixels: int = 0
         self.height_pixels: int = 0
+        self.source_window_bounds: Optional[Tuple[float, float, float, float, float, float]] = None
+        self.raster_trim_applied: bool = False
 
         # Density maps: layer_name -> (density_map, id_map)
         self.density_maps: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
@@ -176,6 +179,47 @@ class DensityMapGenerator:
 
         self.width_pixels = self.target_size
         self.height_pixels = self.target_size
+
+    def tighten_raster_bounds_to_conductors(
+        self,
+        selected_layers: Optional[Sequence[str]] = None,
+    ) -> bool:
+        """Remove legacy CAP3D window margins by rasterizing around conductor geometry."""
+        try:
+            x_min, y_min, x_max, y_max = self.compute_conductor_bounds(selected_layers=selected_layers)
+        except ValueError:
+            return False
+
+        width_um = float(x_max - x_min)
+        height_um = float(y_max - y_min)
+        max_dim = max(width_um, height_um)
+        if max_dim <= 0.0:
+            return False
+
+        if self.window is not None:
+            self.source_window_bounds = (
+                float(min(self.window.v1[0], self.window.v2[0])),
+                float(min(self.window.v1[1], self.window.v2[1])),
+                float(min(self.window.v1[2], self.window.v2[2])),
+                float(max(self.window.v1[0], self.window.v2[0])),
+                float(max(self.window.v1[1], self.window.v2[1])),
+                float(max(self.window.v1[2], self.window.v2[2])),
+            )
+        else:
+            self.source_window_bounds = None
+
+        if width_um < max_dim:
+            pad_x = 0.5 * (max_dim - width_um)
+            x_min -= pad_x
+            x_max += pad_x
+        if height_um < max_dim:
+            pad_y = 0.5 * (max_dim - height_um)
+            y_min -= pad_y
+            y_max += pad_y
+
+        self.set_raster_bounds(x_min, y_min, x_max, y_max, pixel_resolution=None)
+        self.raster_trim_applied = True
+        return True
 
     def set_raster_bounds(
         self,
@@ -534,6 +578,10 @@ class DensityMapGenerator:
             self.x_max, self.y_max, z_max
         ], dtype=np.float64)
         data['pixel_resolution'] = np.array(self.pixel_resolution, dtype=np.float64)
+        data['raster_trim_applied'] = np.array(1 if self.raster_trim_applied else 0, dtype=np.uint8)
+
+        if self.source_window_bounds is not None:
+            data['source_window_bounds'] = np.array(self.source_window_bounds, dtype=np.float64)
 
         if self.conductor_id_map:
             conductor_names = []
@@ -563,6 +611,7 @@ class DensityMapGenerator:
         metadata = {
             'window_name': self.window.name if self.window else self.cap3d_file.stem,
             'pixel_resolution': float(self.pixel_resolution),
+            'raster_trim_applied': bool(self.raster_trim_applied),
             'grid_size': {
                 'width': int(self.width_pixels),
                 'height': int(self.height_pixels)
@@ -576,6 +625,16 @@ class DensityMapGenerator:
             'layers': layers_list,
             'conductors': self.conductor_metadata
         }
+
+        if self.source_window_bounds is not None:
+            metadata['source_window_bounds'] = {
+                'x_min': float(self.source_window_bounds[0]),
+                'y_min': float(self.source_window_bounds[1]),
+                'z_min': float(self.source_window_bounds[2]),
+                'x_max': float(self.source_window_bounds[3]),
+                'y_max': float(self.source_window_bounds[4]),
+                'z_max': float(self.source_window_bounds[5]),
+            }
 
         return metadata
 
@@ -761,6 +820,7 @@ Examples:
 
             generator.parse_cap3d()
             generator.match_layers()
+            generator.tighten_raster_bounds_to_conductors(selected_layers=generator.matched_layers)
             generator.generate_density_maps()
 
             if args.output:
@@ -923,6 +983,7 @@ def convert_window(
 
     generator.parse_cap3d()
     generator.match_layers()
+    generator.tighten_raster_bounds_to_conductors(selected_layers=generator.matched_layers)
     generator.generate_density_maps()
 
     saved_npz = Path(generator.save_npz(str(output_npz)))
