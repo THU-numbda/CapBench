@@ -167,12 +167,25 @@ class WindowExtractor:
 
         # Internal caches to avoid repeated heavy KLayout loads
         self._layout_cache: Dict[Path, Dict[str, Any]] = {}
-        self._width_cache: Dict[Path, Tuple[float, Dict[Tuple[int, int], float]]] = {}
+        self._width_cache: Dict[
+            Tuple[Path, Path, str],
+            Tuple[
+                float,
+                Dict[Tuple[int, int], float],
+                Dict[Tuple[int, int], str],
+                Dict[Tuple[int, int], Tuple[float, float]],
+            ],
+        ] = {}
         self._def_cache: Dict[Path, Any] = {}
         self._l2n_cache: Dict[Tuple[Path, Path], Dict[str, Any]] = {}  # (gds_path, layermap_file) -> l2n_data
         self._layer_mapping_cache: Dict[int, Dict[str, List[int]]] = {}  # layout_id -> layer mappings
         self._lef_macro_size_cache: Dict[Tuple[str, ...], Dict[str, Tuple[float, float]]] = {}
         self._resolved_path_cache: Dict[str, Path] = {}
+        self._layermap_cache: Dict[Path, Dict[str, Tuple[int, int]]] = {}
+        self._reverse_layermap_cache: Dict[Path, Dict[Tuple[int, int], str]] = {}
+        self._selected_layer_cache: Dict[Tuple[Path, str, str], Optional[List[str]]] = {}
+        self._ignored_gds_layers_cache: Dict[Path, Set[int]] = {}
+        self._lef_resolution_cache: Dict[Tuple[Path, str], List[str]] = {}
 
         # Load multi-design configuration
         self.designs = self.load_multi_design_yaml()
@@ -218,15 +231,21 @@ class WindowExtractor:
 
     def _resolve_lef_files(self, stack_file: Path, tech_node: Optional[str]) -> List[str]:
         """Determine LEF files to use for a given design."""
+        stack_path = Path(stack_file).resolve()
+        tech_key = _normalize_layer_key(tech_node)
+        cache_key = (stack_path, tech_key)
+        cached = self._lef_resolution_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
+
         candidates: List[Path] = []
-        stack_path = Path(stack_file)
         perhaps = stack_path.with_suffix('.lef')
         if perhaps.exists():
             candidates.append(perhaps)
-        if tech_node:
+        if tech_key:
             base_dir = stack_path.parent
             for ext in ('.lef', '.tlef'):
-                maybe = base_dir / f"{tech_node}{ext}"
+                maybe = base_dir / f"{tech_key}{ext}"
                 if maybe.exists():
                     candidates.append(maybe)
         # Deduplicate while preserving order
@@ -238,7 +257,8 @@ class WindowExtractor:
                 continue
             seen.add(resolved)
             ordered.append(str(resolved))
-        return ordered
+        self._lef_resolution_cache[cache_key] = ordered
+        return list(ordered)
 
     def _build_output_paths(self, window_name: str) -> Dict[str, Path]:
         """Construct all expected output paths for a window name."""
@@ -408,12 +428,7 @@ class WindowExtractor:
             pass
     def clear_caches(self) -> None:
         """Clear all internal caches to free memory between designs"""
-        self._layout_cache.clear()
-        self._width_cache.clear()
-        self._def_cache.clear()
         self._l2n_cache.clear()
-        self._layer_mapping_cache.clear()
-        self._lef_macro_size_cache.clear()
 
         # Force garbage collection to release memory
         gc.collect()
@@ -543,6 +558,9 @@ class WindowExtractor:
         cache = self._get_design_layout(window_entry['gds_file'])
         layout: pya.Layout = cache['layout']
         layer_regions_cache: Dict[int, pya.Region] = cache['layer_regions']
+        layer_descriptors: List[Dict[str, Any]] = cache['layer_descriptors']
+        allowed_layer_keys = set(allowed_layers) if allowed_layers is not None else None
+        via_layer_keys = set(via_layers) if via_layers is not None else None
 
         # Create target layout for clipped window
         target = pya.Layout()
@@ -565,57 +583,46 @@ class WindowExtractor:
 
         # Load layermap to check layer names
         layermap_file = window_entry.get('layermap_file')
-        layermap = {}
-        if layermap_file and Path(layermap_file).exists():
-            layermap = self._load_layermap(Path(layermap_file))
+        reverse_layermap: Dict[Tuple[int, int], str] = {}
+        if allowed_layer_keys is not None and layermap_file and Path(layermap_file).exists():
+            reverse_layermap = self._get_reverse_layermap(Path(layermap_file))
 
         # Determine which layers to include with early spatial filtering
-        layers_to_include = []
-        for li in range(layout.layers()):
-            info = layout.get_info(li)
-            if not info:
-                continue
+        layers_to_include: List[Dict[str, Any]] = []
+        for descriptor in layer_descriptors:
+            info = descriptor['info']
 
             # Check if this layer should be included
-            if ignored_gds_layers and info.layer in ignored_gds_layers:
+            if ignored_gds_layers and descriptor['gds_layer'] in ignored_gds_layers:
                 continue
             should_include = True
 
-            if allowed_layers is not None:
-                # Find the layer name for this GDS layer
-                layer_name = None
-                info_dtype = getattr(info, "datatype", 0)
-                for name, gds_spec in layermap.items():
-                    gds_layer, gds_dtype = gds_spec
-                    if gds_layer == info.layer and gds_dtype == info_dtype:
-                        layer_name = name
-                        break
-
-                layer_name_key = _normalize_layer_key(layer_name) if isinstance(layer_name, str) else None
+            if allowed_layer_keys is not None:
+                layer_name_key = reverse_layermap.get(descriptor['gds_spec'])
 
                 # Include if it's an allowed conductor layer
-                if layer_name_key not in allowed_layers:
+                if layer_name_key not in allowed_layer_keys:
                     # But also include if it's a via/contact layer (needed for connectivity)
-                    if not via_layers or layer_name_key not in via_layers:
+                    if not via_layer_keys or layer_name_key not in via_layer_keys:
                         should_include = False
 
             if should_include:
                 # KLayout optimization: Early spatial filtering using bounding box check
-                layer_region = layer_regions_cache.get(li)
+                layer_region = layer_regions_cache.get(descriptor['layer_index'])
                 if not layer_region or layer_region.is_empty():
                     continue
 
                 # Quick bounding box overlap check before detailed processing
-                if not layer_region.bbox().overlaps(clip_box):
+                if not descriptor['bbox'].overlaps(clip_box):
                     continue
 
-                layers_to_include.append(li)
+                layers_to_include.append(descriptor)
 
         # Use efficient region-based geometry copying (better than shape-by-shape)
         any_geometry = False
-        for li in layers_to_include:
-            info = layout.get_info(li)
-            layer_region = layer_regions_cache.get(li)
+        for descriptor in layers_to_include:
+            info = descriptor['info']
+            layer_region = layer_regions_cache.get(descriptor['layer_index'])
             if not layer_region or layer_region.is_empty():
                 continue
 
@@ -675,8 +682,17 @@ class WindowExtractor:
         if not tech_node or not size_category or not stack_file:
             return None
 
+        stack_path = Path(stack_file).resolve()
+        tech_key = _normalize_layer_key(tech_node)
+        size_key = _normalize_layer_key(size_category)
+        cache_key = (stack_path, tech_key, size_key)
+        if cache_key in self._selected_layer_cache:
+            cached = self._selected_layer_cache[cache_key]
+            return list(cached) if cached is not None else None
+
         limit_spec = self._resolve_layer_limit_spec(tech_node, size_category)
         if not limit_spec:
+            self._selected_layer_cache[cache_key] = None
             return None
 
         bottom_name = (
@@ -692,11 +708,12 @@ class WindowExtractor:
             or limit_spec.get('max_layer')
         )
         if not bottom_name or not top_name:
+            self._selected_layer_cache[cache_key] = None
             return None
 
         from capbench._internal.common.tech_parser import get_conductor_layers
 
-        conductor_layers, _ = get_conductor_layers(str(stack_file))
+        conductor_layers, _ = get_conductor_layers(str(stack_path))
         normalized_layers = [_normalize_layer_key(layer) for layer in conductor_layers]
         bottom_key = _normalize_layer_key(bottom_name)
         top_key = _normalize_layer_key(top_name)
@@ -720,7 +737,9 @@ class WindowExtractor:
                 f"{bottom_name} is above {top_name}"
             )
 
-        return conductor_layers[start_idx:end_idx + 1]
+        selected_layers = conductor_layers[start_idx:end_idx + 1]
+        self._selected_layer_cache[cache_key] = list(selected_layers)
+        return list(selected_layers)
 
     # ===== L2N-guided grouping helpers =====
     @staticmethod
@@ -744,10 +763,18 @@ class WindowExtractor:
         Returns a dictionary mapping layer names to (layer number, datatype) tuples.
         Via layers are identified by checking if the name starts with 'via' or is 'contact'.
         """
+        resolved_layermap = Path(layermap_file).resolve()
+        cached = self._layermap_cache.get(resolved_layermap)
+        if cached is not None:
+            return cached
+
         layer_map: Dict[str, Tuple[int, int]] = {}
-        if not layermap_file.exists():
+        reverse_map: Dict[Tuple[int, int], str] = {}
+        if not resolved_layermap.exists():
+            self._layermap_cache[resolved_layermap] = layer_map
+            self._reverse_layermap_cache[resolved_layermap] = reverse_map
             return layer_map
-        with layermap_file.open() as f:
+        with resolved_layermap.open() as f:
             for line in f:
                 s = line.strip()
                 if not s or s.startswith('#') or ':' not in s:
@@ -768,7 +795,46 @@ class WindowExtractor:
                     continue
                 lname = target.split('(')[0].strip().lower() if '(' in target else target.strip().lower()
                 layer_map[lname] = (gds_num, dtype)
+                reverse_map[(gds_num, dtype)] = _normalize_layer_key(lname)
+        self._layermap_cache[resolved_layermap] = layer_map
+        self._reverse_layermap_cache[resolved_layermap] = reverse_map
         return layer_map
+
+    def _get_reverse_layermap(self, layermap_file: Path) -> Dict[Tuple[int, int], str]:
+        resolved_layermap = Path(layermap_file).resolve()
+        if resolved_layermap not in self._reverse_layermap_cache:
+            self._load_layermap(resolved_layermap)
+        return self._reverse_layermap_cache.get(resolved_layermap, {})
+
+    def _get_ignored_gds_layers(self, layermap_file: Optional[Path]) -> Set[int]:
+        if not layermap_file:
+            return set()
+
+        resolved_layermap = Path(layermap_file).resolve()
+        cached = self._ignored_gds_layers_cache.get(resolved_layermap)
+        if cached is not None:
+            return set(cached)
+
+        ignored_gds_layers: Set[int] = set()
+        ignored_layer_names = {
+            'gate',
+            'fgate',
+            'lig',
+            'lisd',
+            'fin',
+            'contact',
+            'lisd_to_metal1',
+        }
+        try:
+            layermap_data = self._load_layermap(resolved_layermap)
+            for lname, (gds_num, _gds_dtype) in layermap_data.items():
+                if str(lname).lower() in ignored_layer_names:
+                    ignored_gds_layers.add(gds_num)
+        except Exception:
+            pass
+
+        self._ignored_gds_layers_cache[resolved_layermap] = ignored_gds_layers
+        return set(ignored_gds_layers)
 
     def _build_l2n(self, gds_path: Path, layermap_file: Path):
         layout = pya.Layout()
@@ -1022,27 +1088,35 @@ class WindowExtractor:
             FileNotFoundError: If stack_file or layermap_file doesn't exist
             ValueError: If required configuration is missing or invalid
         """
-        if not stack_file.exists():
-            raise FileNotFoundError(f"Technology stack file not found: {stack_file}")
+        stack_path = Path(stack_file).resolve()
+        layermap_path = Path(layermap_file).resolve() if layermap_file else None
+        tech_key = _normalize_layer_key(tech_node)
+        cache_key = (stack_path, layermap_path, tech_key)
+        cached = self._width_cache.get(cache_key) if layermap_path else None
+        if cached is not None:
+            return cached
 
-        if not layermap_file or not layermap_file.exists():
-            raise FileNotFoundError(f"Layermap file not found: {layermap_file}")
+        if not stack_path.exists():
+            raise FileNotFoundError(f"Technology stack file not found: {stack_path}")
+
+        if not layermap_path or not layermap_path.exists():
+            raise FileNotFoundError(f"Layermap file not found: {layermap_path}")
 
         try:
             yaml_module = _require_yaml_module()
-            with stack_file.open() as f:
+            with stack_path.open() as f:
                 tech_data = yaml_module.safe_load(f)
         except Exception as e:
-            raise ValueError(f"Could not load tech stack YAML {stack_file}: {e}")
+            raise ValueError(f"Could not load tech stack YAML {stack_path}: {e}")
 
         # Load layermap for GDS layer number mapping
         try:
-            layermap = self._load_layermap(layermap_file)
+            layermap = self._load_layermap(layermap_path)
         except Exception as e:
-            raise ValueError(f"Could not load layermap {layermap_file}: {e}")
+            raise ValueError(f"Could not load layermap {layermap_path}: {e}")
 
         if not layermap:
-            raise ValueError(f"Layermap is empty: {layermap_file}")
+            raise ValueError(f"Layermap is empty: {layermap_path}")
 
         # Normalize layermap keys for lookups (layermap already contains tuples)
         layermap_lookup: Dict[str, Tuple[int, int]] = {}
@@ -1052,7 +1126,7 @@ class WindowExtractor:
         # Extract layer widths from new stack structure with wmin_um properties
         stack_data = tech_data.get('stack', [])
         if not stack_data:
-            raise ValueError(f"stack section not found or empty in {stack_file}")
+            raise ValueError(f"stack section not found or empty in {stack_path}")
 
         layers_um = {}
         for layer in stack_data:
@@ -1073,7 +1147,7 @@ class WindowExtractor:
             pass
 
         if not layers_um:
-            raise ValueError(f"No metal layers with wmin_um properties found in {stack_file}")
+            raise ValueError(f"No metal layers with wmin_um properties found in {stack_path}")
 
         # Set global minimum as the minimum of all layer minimums
         global_min = min(layers_um.values()) if layers_um else None
@@ -1086,7 +1160,7 @@ class WindowExtractor:
                 # Get allowed conductor layers from limited total stack (includes dielectrics)
                 from capbench._internal.common.tech_parser import get_all_layers_with_limit
 
-                _, allowed_conductor_layers, _ = get_all_layers_with_limit(str(stack_file), max_layers)
+                _, allowed_conductor_layers, _ = get_all_layers_with_limit(str(stack_path), max_layers)
                 allowed_set = {str(name).lower() for name in allowed_conductor_layers}
   
                 # Filter layers to conductors within limit and vias bridging them
@@ -1222,12 +1296,13 @@ class WindowExtractor:
                     layer_key = (gds_layer, dtype)
                     layer_z_heights[layer_key] = (via_lower, via_upper)
 
-        if per_layer_min:
-            return global_min, per_layer_min, per_layer_names, layer_z_heights
-        else:
-            raise ValueError(f"No layers could be mapped from {stack_file.name}. "
+        if not per_layer_min:
+            raise ValueError(f"No layers could be mapped from {stack_path.name}. "
                            f"Unmapped layers: {unmapped_layers}. "
                            f"Available layermap keys: {list(layermap.keys())}")
+        result = (global_min, per_layer_min, per_layer_names, layer_z_heights)
+        self._width_cache[cache_key] = result
+        return result
 
     # Removed unused functions: measure_min_conductor_widths_for_design() and _measure_widths_dynamically()
     # These were redundant with load_precomputed_widths() which is now the primary method
@@ -1252,6 +1327,7 @@ class WindowExtractor:
 
         # KLayout optimization: Create regions only for non-empty layers
         layer_regions: Dict[int, pya.Region] = {}
+        layer_descriptors: List[Dict[str, Any]] = []
         for li in range(layout.layers()):
             shapes = flat_cell.shapes(li)
             if shapes.is_empty():
@@ -1262,7 +1338,21 @@ class WindowExtractor:
             try:
                 # Peek at first shape to avoid creating empty Region
                 next(shapes_iter)
-                layer_regions[li] = pya.Region(shapes)  # Only create Region if we have shapes
+                layer_region = pya.Region(shapes)  # Only create Region if we have shapes
+                layer_regions[li] = layer_region
+                info = layout.get_info(li)
+                if info is not None:
+                    dtype = getattr(info, "datatype", 0)
+                    layer_descriptors.append(
+                        {
+                            'layer_index': li,
+                            'info': info,
+                            'gds_layer': info.layer,
+                            'datatype': dtype,
+                            'gds_spec': (info.layer, dtype),
+                            'bbox': layer_region.bbox(),
+                        }
+                    )
             except StopIteration:
                 # No shapes in this layer, skip Region creation
                 continue
@@ -1272,6 +1362,7 @@ class WindowExtractor:
             'flat_cell': flat_cell,
             'dbu': layout.dbu,
             'layer_regions': layer_regions,
+            'layer_descriptors': layer_descriptors,
         }
         self._layout_cache[gds_path] = cache_entry
         return cache_entry
@@ -1303,7 +1394,7 @@ class WindowExtractor:
         self._l2n_cache[cache_key] = l2n_data
         return l2n_data
 
-    def _get_layer_mappings(self, layout: pya.Layout, layer_map: Dict[str, int]) -> Dict[str, List[int]]:
+    def _get_layer_mappings(self, layout: pya.Layout, layer_map: Dict[str, Tuple[int, int]]) -> Dict[str, List[int]]:
         """Get cached layer index mappings for a layout.
 
         This avoids iterating through all layers multiple times.
@@ -1317,11 +1408,12 @@ class WindowExtractor:
         # Build layer mappings (this iterates through all layers)
         mappings: Dict[str, List[int]] = {}
 
-        for name, gnum in layer_map.items():
+        for name, gds_spec in layer_map.items():
+            gds_layer, gds_dtype = gds_spec
             idxs: List[int] = []
             for li in range(layout.layers()):
                 info = layout.get_info(li)
-                if info and info.layer == gnum:
+                if info and info.layer == gds_layer and getattr(info, "datatype", 0) == gds_dtype:
                     idxs.append(li)
             mappings[name] = idxs
 
@@ -1773,7 +1865,6 @@ class WindowExtractor:
         name = window_entry['name']
         outputs = window_entry.get('outputs') or self._build_output_paths(name)
         selected_layers = self._resolve_selected_layers_for_window(window_entry)
-        lef_files = self._resolve_lef_files(window_entry['stack_file'], window_entry.get('tech_node'))
 
         if self._should_run_conversion_stage('pct', outputs['pct']):
             if not cap3d_path.exists():
@@ -1829,6 +1920,8 @@ class WindowExtractor:
         stack_file = window_entry['stack_file']
         layermap_file = window_entry['layermap_file']
         tech_node = window_entry['tech_node']
+        selected_layers = self._resolve_selected_layers_for_window(window_entry)
+        lef_files = self._resolve_lef_files(stack_file, tech_node) if self.should_run_stage('cap3d') else []
 
         gds_out = outputs['gds']
         def_out = outputs['def']
@@ -1858,22 +1951,13 @@ class WindowExtractor:
             global_min_width, layer_min_widths, layer_name_map, layer_z_heights = self.load_precomputed_widths(
                 stack_file, layermap_file, tech_node
             )
-            selected_layers = self._resolve_selected_layers_for_window(window_entry)
             selected_layer_keys = (
                 {_normalize_layer_key(layer) for layer in selected_layers}
                 if selected_layers else None
             )
 
             # Extract the requested conductor stack and keep the existing always-ignore layers excluded.
-            ignored_gds_layers: Set[int] = set()
-            try:
-                layermap_data = self._load_layermap(layermap_file)
-                for lname, gds_num in layermap_data.items():
-                    lname_lower = str(lname).lower()
-                    if lname_lower in {'gate', 'fgate', 'lig', 'lisd', 'fin', 'contact', 'lisd_to_metal1'}:
-                        ignored_gds_layers.add(gds_num)
-            except Exception:
-                pass
+            ignored_gds_layers = self._get_ignored_gds_layers(layermap_file)
 
             # Extract only the configured conductor stack for this tech/size bucket.
             self.extract_gds_window_klayout(
@@ -1997,7 +2081,7 @@ class WindowExtractor:
                             layermap_file=str(layermap_path),
                             output_file=str(cap3d_path),
                             process_node=tech_node,
-                            lef_files=self._resolve_lef_files(stack_file, tech_node),
+                            lef_files=lef_files,
                         )
                         generator.run()
                         if not cap3d_path.exists():

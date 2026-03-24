@@ -87,7 +87,9 @@ class DEF2Cap3D:
 
         # For each canonical layer name, map layout layer_idx -> L2N layer region
         self.layer_regions: Dict[str, Dict[int, pya.LayoutToNetlist.Layer]] = {}
+        self._layout_layer_index_map: Dict[Tuple[int, int], List[int]] = {}
         self._def_units: Optional[int] = None
+        self._def_data = None
         provided_lefs = [Path(p) for p in lef_files] if lef_files else []
         self._lef_files: List[Path] = provided_lefs if provided_lefs else self._resolve_lef_files()
 
@@ -147,6 +149,34 @@ class DEF2Cap3D:
     def _sanitize_net_name(self, name: str) -> str:
         """Return a safe net name with disallowed characters removed."""
         return self._net_name_sanitizer.sanitize(name)
+
+    @staticmethod
+    def _cell_has_child_instances(cell) -> bool:
+        try:
+            inst_iter = cell.each_inst()
+            next(inst_iter)
+            return True
+        except StopIteration:
+            return False
+        except Exception:
+            return True
+
+    def _build_layout_layer_index_map(self) -> None:
+        mapping: DefaultDict[Tuple[int, int], List[int]] = defaultdict(list)
+        if self.layout is None:
+            self._layout_layer_index_map = {}
+            return
+
+        for li in range(self.layout.layers()):
+            info = self.layout.get_info(li)
+            if not info:
+                continue
+            mapping[(info.layer, getattr(info, "datatype", 0))].append(li)
+
+        self._layout_layer_index_map = dict(mapping)
+
+    def _get_layer_indices(self, entry: LayerEntry) -> List[int]:
+        return self._layout_layer_index_map.get((entry.gds_layer, entry.datatype), [])
 
     def _load_yaml_stack(self):
         """Parse YAML layer stack file and build layer maps and dielectric stack.
@@ -337,18 +367,22 @@ class DEF2Cap3D:
         if not self.top_cell:
             raise RuntimeError("No top cell found in GDS file")
 
-        # Flatten the layout to get individual primitive shapes
-        flat_cell_index = self.layout.add_cell("FLAT")
-        flat_cell = self.layout.cell(flat_cell_index)
-        flat_cell.copy_tree(self.top_cell)
-        flat_cell.flatten(True)  # True = prune empty cells after flattening
-        self.top_cell = flat_cell
+        # Flatten only when the clipped window GDS still contains hierarchy.
+        if self._cell_has_child_instances(self.top_cell):
+            flat_cell_index = self.layout.add_cell("FLAT")
+            flat_cell = self.layout.cell(flat_cell_index)
+            flat_cell.copy_tree(self.top_cell)
+            flat_cell.flatten(True)  # True = prune empty cells after flattening
+            self.top_cell = flat_cell
+
+        self._build_layout_layer_index_map()
 
         # Load DEF
         try:
-            def_data = parse_def(self.def_file)
-            self._def_units = def_data.units if def_data and def_data.units else None
+            self._def_data = parse_def(self.def_file)
+            self._def_units = self._def_data.units if self._def_data and self._def_data.units else None
         except Exception:
+            self._def_data = None
             self._def_units = None
 
         self.def_layout = pya.Layout()
@@ -377,17 +411,6 @@ class DEF2Cap3D:
 
     def run_l2n_extraction(self):
         """Run L2N on flattened GDS to find geometric clusters."""
-        # Helper: collect all layout layer indices in GDS for a given layer number (any datatype)
-        def collect_indices(entry: LayerEntry) -> List[int]:
-            idxs: List[int] = []
-            for li in range(self.layout.layers()):
-                info = self.layout.get_info(li)
-                if not info:
-                    continue
-                if info.layer == entry.gds_layer and info.datatype == entry.datatype:
-                    idxs.append(li)
-            return idxs
-
         # Use flat layout for L2N (layout is already flattened)
         rsi = pya.RecursiveShapeIterator(self.layout, self.top_cell, [])
         self.l2n = pya.LayoutToNetlist(rsi)
@@ -397,7 +420,7 @@ class DEF2Cap3D:
         used_names = set()
         # Conductor layers are populated in self.layer_map for downstream use
         for name, entry in self.layer_map.items():
-            idxs = collect_indices(entry)
+            idxs = self._get_layer_indices(entry)
             if not idxs:
                 continue
             self.layer_regions[name] = {}
@@ -472,7 +495,10 @@ class DEF2Cap3D:
         except Exception as e:
             raise RuntimeError(f"Failed to import DEF parser: {e}")
 
-        def_data = _parse_def(self.def_file)
+        def_data = self._def_data
+        if def_data is None:
+            def_data = _parse_def(self.def_file)
+            self._def_data = def_data
 
         # Optional debug: build geometric Regions per canonical layer to test midpoint-inside
         geom_regions: Dict[str, Optional[pya.Region]] = {}
@@ -487,11 +513,7 @@ class DEF2Cap3D:
             if not entry:
                 geom_regions[canonical_layer] = None
                 return None
-            idxs: List[int] = []
-            for li in range(self.layout.layers()):
-                info = self.layout.get_info(li)
-                if info and info.layer == entry.gds_layer and info.datatype == entry.datatype:
-                    idxs.append(li)
+            idxs = self._get_layer_indices(entry)
             if not idxs:
                 geom_regions[canonical_layer] = None
                 return None
@@ -592,28 +614,24 @@ class DEF2Cap3D:
                     if canonical_layer in self.layer_map:
                         vinfo = self.layer_map.get(canonical_layer)
                         if vinfo:
-                            for j, li in enumerate(range(self.layout.layers())):
-                                info = self.layout.get_info(li)
-                                if not info:
-                                    continue
-                                if info.layer == vinfo.gds_layer and info.datatype == vinfo.datatype:
-                                    key = (canonical_layer, li)
-                                    cached_region = extra_via_layer_cache.get(key)
-                                    if cached_region is None:
-                                        # Create unique layer name for additional via layers
-                                        base_name = f"{canonical_layer}_extra_{j}"
-                                        unique_layer_name = base_name
-                                        suffix = 0
-                                        while unique_layer_name in used_names:
-                                            if suffix == 0:
-                                                unique_layer_name = f"{base_name}_{li}"
-                                            else:
-                                                unique_layer_name = f"{base_name}_{li}_{suffix}"
-                                            suffix += 1
-                                        used_names.add(unique_layer_name)
-                                        cached_region = self.l2n.make_layer(li, unique_layer_name)
-                                        extra_via_layer_cache[key] = cached_region
-                                    regions_to_try.append(cached_region)
+                            for j, li in enumerate(self._get_layer_indices(vinfo)):
+                                key = (canonical_layer, li)
+                                cached_region = extra_via_layer_cache.get(key)
+                                if cached_region is None:
+                                    # Create unique layer name for additional via layers
+                                    base_name = f"{canonical_layer}_extra_{j}"
+                                    unique_layer_name = base_name
+                                    suffix = 0
+                                    while unique_layer_name in used_names:
+                                        if suffix == 0:
+                                            unique_layer_name = f"{base_name}_{li}"
+                                        else:
+                                            unique_layer_name = f"{base_name}_{li}_{suffix}"
+                                        suffix += 1
+                                    used_names.add(unique_layer_name)
+                                    cached_region = self.l2n.make_layer(li, unique_layer_name)
+                                    extra_via_layer_cache[key] = cached_region
+                                regions_to_try.append(cached_region)
                         # Also try layers connected to this via according to YAML definitions
                         if self.tech_data and 'vias' in self.tech_data and canonical_layer in self.tech_data['vias']:
                             via_def = self.tech_data['vias'][canonical_layer]
@@ -713,12 +731,7 @@ class DEF2Cap3D:
             raise RuntimeError("Invalid DBU encountered while extracting shapes")
         # Iterate through each layer (metals and vias)
         for layer_name, layer_entry in all_layers.items():
-            # Collect all layout layer indices for this GDS layer number (any datatype)
-            layer_indices = []
-            for li in range(self.layout.layers()):
-                info = self.layout.get_info(li)
-                if info and info.layer == layer_entry.gds_layer and info.datatype == layer_entry.datatype:
-                    layer_indices.append(li)
+            layer_indices = self._get_layer_indices(layer_entry)
             if not layer_indices:
                 continue
 
