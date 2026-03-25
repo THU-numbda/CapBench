@@ -5,6 +5,7 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -21,6 +22,10 @@ from capbench._internal.common.density_window_bundle import (
     load_density_window_meta,
     save_density_window_shards,
 )
+try:
+    from tools.preprocess.converters.cnn_cap import DensityMapGenerator
+except ModuleNotFoundError:  # pragma: no cover - depends on runtime environment
+    DensityMapGenerator = None  # type: ignore[assignment]
 
 try:
     import torch  # noqa: F401
@@ -212,6 +217,34 @@ class DensityWindowBundleTests(unittest.TestCase):
             self.assertEqual(raw_index["windows"]["W0"]["shard_id"], 0)
             self.assertEqual(raw_index["windows"]["W1"]["shard_id"], 1)
             self.assertEqual(raw_index["windows"]["W3"]["shard_id"], 1)
+
+    @unittest.skipIf(DensityMapGenerator is None, "cnn converter dependencies are not installed")
+    def test_converter_uses_cap3d_filename_for_shard_window_id(self) -> None:
+        generator = DensityMapGenerator(
+            "/tmp/W8.cap3d",
+            "/tmp/tech.yaml",
+            pixel_resolution=0.5,
+            target_size=2,
+        )
+        generator.tech_conductor_layers = ["M1"]
+        generator.width_pixels = 2
+        generator.height_pixels = 2
+        generator.x_min = 0.0
+        generator.y_min = 0.0
+        generator.x_max = 1.0
+        generator.y_max = 1.0
+        generator.raster_trim_applied = False
+        generator.window = SimpleNamespace(name="case-0", v1=(0.0, 0.0, 0.0), v2=(1.0, 1.0, 1.0))
+        generator.density_maps = {
+            "M1": (
+                np.ones((2, 2), dtype=np.float32),
+                np.zeros((2, 2), dtype=np.int32),
+            )
+        }
+
+        payload = generator.build_bundle_data()
+
+        self.assertEqual(payload["window_id"], "W8")
 
     @unittest.skipIf(torch is None, "PyTorch is required for dataset materialization tests")
     def test_grouped_sampler_batches_windows_by_shard(self) -> None:

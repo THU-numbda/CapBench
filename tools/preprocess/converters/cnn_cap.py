@@ -559,7 +559,7 @@ class DensityMapGenerator:
         z_max = self.window.v2[2] if self.window else 0.0
 
         return {
-            "window_id": self.window.name if self.window else self.cap3d_file.stem,
+            "window_id": self.cap3d_file.stem,
             "layer_names": layer_list,
             "layer_has_density": layer_has_density,
             "density": density,
