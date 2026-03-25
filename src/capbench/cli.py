@@ -9,7 +9,7 @@ from typing import Sequence
 from . import __version__
 from .datasets import get_dataset_info, get_dataset_infos, install_dataset, list_datasets
 from .paths import get_cache_dir
-from .visualize import visualize_cap3d, visualize_density, visualize_point_cloud
+from .visualize import visualize_cap3d
 
 
 _DATASET_SIZE_ORDER = {
@@ -97,7 +97,7 @@ def _print_dataset_list() -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="capbench",
-        description="CapBench library CLI for cache-backed datasets, dataloaders, and visualization.",
+        description="CapBench library CLI for cache-backed datasets, dataloaders, and CAP3D visualization.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -117,18 +117,8 @@ def _build_parser() -> argparse.ArgumentParser:
     datasets_install.add_argument("dataset")
     datasets_install.add_argument("--source", default=None, help="Override the configured dataset source name.")
 
-    visualize_parser = subparsers.add_parser("visualize", help="Visualization commands for cached artifacts.")
+    visualize_parser = subparsers.add_parser("visualize", help="CAP3D visualization commands for cached artifacts.")
     visualize_subparsers = visualize_parser.add_subparsers(dest="visualize_command", required=True)
-
-    density_parser = visualize_subparsers.add_parser("density", help="Visualize one density-map window.")
-    density_parser.add_argument("--dataset", default="nangate45/small", help="Registered dataset id or explicit dataset path.")
-    density_parser.add_argument("--window", required=True, help="Window id, for example W0.")
-    density_parser.add_argument("viewer_args", nargs=argparse.REMAINDER, help="Extra args passed through to the viewer.")
-
-    point_parser = visualize_subparsers.add_parser("point-cloud", help="Visualize one point-cloud window.")
-    point_parser.add_argument("--dataset", default="nangate45/small", help="Registered dataset id or explicit dataset path.")
-    point_parser.add_argument("--window", required=True, help="Window id, for example W0.")
-    point_parser.add_argument("viewer_args", nargs=argparse.REMAINDER, help="Extra args passed through to the viewer.")
 
     cap3d_parser = visualize_subparsers.add_parser("cap3d", help="Visualize one CAP3D window.")
     cap3d_parser.add_argument("--dataset", default="nangate45/small", help="Registered dataset id or explicit dataset path.")
@@ -162,12 +152,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
     if args.command == "visualize":
-        if args.visualize_command == "density":
-            visualize_density(args.dataset, window_id=args.window, extra_args=args.viewer_args)
-            return 0
-        if args.visualize_command == "point-cloud":
-            visualize_point_cloud(args.dataset, window_id=args.window, extra_args=args.viewer_args)
-            return 0
         if args.visualize_command == "cap3d":
             visualize_cap3d(args.dataset, window_id=args.window, extra_args=args.viewer_args)
             return 0

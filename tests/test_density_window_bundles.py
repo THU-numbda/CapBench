@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -12,8 +13,12 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from capbench._internal.common.density_window_bundle import save_density_window_bundle
-from capbench.visualization.viewer_density_maps import load_density_bundle
+from capbench._internal.common.density_window_bundle import (
+    META_FILENAME,
+    load_density_window_density,
+    load_density_window_meta,
+    save_density_window_bundle,
+)
 
 try:
     import torch  # noqa: F401
@@ -146,15 +151,19 @@ class DensityWindowBundleTests(unittest.TestCase):
             self.assertIn(float(target.item()), {3.0, 4.0})
             self.assertTrue(np.isin(tensor.numpy(), [0.0, 1.0, 2.0]).all())
 
-    def test_bundle_view_loader_reads_new_format(self) -> None:
+    def test_bundle_metadata_and_density_round_trip(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             bundle_dir = _write_window_bundle(root, "W0")
 
-            dataset = load_density_bundle(bundle_dir)
-            self.assertEqual(dataset.layers, ["M1", "M2"])
-            self.assertEqual(dataset.density_maps["M1"].shape, (2, 2))
-            self.assertAlmostEqual(dataset.pixel_resolution, 0.5, places=5)
+            meta = load_density_window_meta(bundle_dir)
+            density = load_density_window_density(bundle_dir, mmap_mode=None)
+            raw_meta = json.loads((bundle_dir / META_FILENAME).read_text(encoding="utf-8"))
+
+            self.assertEqual(list(meta.layer_names), ["M1", "M2"])
+            self.assertEqual(density.shape, (2, 2, 2))
+            self.assertAlmostEqual(meta.pixel_resolution, 0.5, places=5)
+            self.assertEqual(raw_meta["window_id"], "W0")
 
     @unittest.skipIf(torch is None, "PyTorch is required for dataset materialization tests")
     def test_grouped_sampler_batches_samples_by_window(self) -> None:
