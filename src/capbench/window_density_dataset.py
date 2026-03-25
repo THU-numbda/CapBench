@@ -1,9 +1,9 @@
 """
-CapBench window dataset loader for cached density-window bundles.
+CapBench window dataset loader for cached density-window shards.
 
-The dataset indexes per-window density bundles and SPEF labels up front, but it
-loads dense tensors lazily on first sample access. This keeps initialization
-memory bounded while preserving the existing sample semantics:
+The dataset indexes shard metadata and SPEF labels up front, but it loads dense
+window tensors lazily on first sample access. This keeps initialization memory
+bounded while preserving the existing sample semantics:
 
 * self-capacitance: one sample per conductor
 * coupling-capacitance: one sample per unordered conductor pair
@@ -30,12 +30,11 @@ from capbench._internal.common.datasets import (
     LABELS_RWCAP_DIR,
 )
 from capbench._internal.common.density_window_bundle import (
+    DensityWindowIndex,
     density_window_bundle_path,
     discover_density_window_ids,
-    load_density_window_conductor_map,
-    load_density_window_density,
-    load_density_window_ids,
-    load_density_window_meta,
+    load_density_window_index,
+    read_density_window_shard,
 )
 from capbench.formats.spef.openrcx_to_simple_spef import parse_spef_components
 from capbench.formats.spef.python_parser import load_dnet_totals
@@ -49,6 +48,8 @@ class _WindowSpec:
     layer_has_density: tuple[bool, ...]
     shape: tuple[int, int, int]
     conductor_ids: Dict[str, int]
+    shard_id: int
+    shard_offset: int
 
 
 @dataclass
@@ -58,6 +59,14 @@ class _CachedWindowData:
     conductor_coords: Dict[int, List[Tuple[int, np.ndarray, np.ndarray]]] = field(
         default_factory=dict
     )
+
+
+@dataclass
+class _CachedShardData:
+    density: Optional[np.ndarray]
+    id_maps: np.ndarray
+    window_ids: tuple[str, ...]
+    windows: Dict[str, _CachedWindowData] = field(default_factory=dict)
 
 
 class _SampleView:
@@ -313,10 +322,10 @@ class _GroupedCouplingStore:
 class WindowCapDataset(Dataset):
     """
     Dataset that produces CNN input tensors and capacitance targets from
-    lazily-loaded density-window bundles.
+    lazily-loaded shard-backed density windows.
 
     Args:
-        window_dir: Directory containing `<window>/meta.json`, `density.npy`, and `id.npy`.
+        window_dir: Directory containing `index.json` and `shards/*.npz`.
         spef_dir: Directory containing matching SPEF files per window.
         window_ids: Iterable of window IDs (for example `["W0", "W1"]`); discovers automatically if None.
         goal: `"self"` for self-capacitance or `"coupling"` for conductor pairs.
@@ -324,7 +333,7 @@ class WindowCapDataset(Dataset):
         dtype: Numpy dtype for tensors prior to conversion to torch.
         solver_preference: Which SPEF solver to prefer when both RWCap and Raphael labels are available.
         build_workers: Number of workers for metadata/sample indexing (0 => automatic parallelism).
-        window_cache_size: Number of windows to keep open in the per-process LRU cache.
+        window_cache_size: Number of shards to keep open in the per-process LRU cache.
     """
 
     @staticmethod
@@ -381,6 +390,7 @@ class WindowCapDataset(Dataset):
         self.window_dir = Path(window_dir).resolve()
         if not self.window_dir.exists():
             raise FileNotFoundError(f"Window directory not found: {self.window_dir}")
+        self._density_index: DensityWindowIndex = load_density_window_index(self.window_dir)
 
         self.spef_dir = Path(spef_dir).resolve() if spef_dir is not None else None
         self.goal = goal.lower()
@@ -399,7 +409,7 @@ class WindowCapDataset(Dataset):
 
         self._build_workers = build_workers if build_workers > 0 else max(1, os.cpu_count() or 1)
         self._window_cache_size = int(window_cache_size)
-        self._window_cache: OrderedDict[str, _CachedWindowData] = OrderedDict()
+        self._shard_cache: OrderedDict[int, _CachedShardData] = OrderedDict()
         self._required_layers_override = [str(layer) for layer in required_layers] if required_layers else None
 
         if window_ids is None:
@@ -494,6 +504,9 @@ class WindowCapDataset(Dataset):
 
     def get_window_ids(self) -> List[str]:
         return self._window_ids.copy()
+
+    def get_window_shard_ids(self) -> List[int]:
+        return [int(window.shard_id) for window in self._windows]
 
     def get_window_sample_ranges(self) -> List[Tuple[int, int]]:
         ranges: List[Tuple[int, int]] = []
@@ -664,12 +677,13 @@ class WindowCapDataset(Dataset):
         subset.highlight_scale = self.highlight_scale
         subset.dtype = self.dtype
         subset.solver_preference = self.solver_preference
+        subset._density_index = self._density_index
         subset._required_layers_override = (
             list(self._required_layers_override) if self._required_layers_override else None
         )
         subset._build_workers = self._build_workers
         subset._window_cache_size = self._window_cache_size
-        subset._window_cache = OrderedDict()
+        subset._shard_cache = OrderedDict()
         if hasattr(self, "_trim_margin"):
             subset._trim_margin = self._trim_margin
 
@@ -746,13 +760,9 @@ class WindowCapDataset(Dataset):
         idx: int,
         win_id: str,
     ) -> Optional[Tuple[int, str, _WindowSpec, _WindowSampleStore, Path]]:
-        bundle_dir = density_window_bundle_path(self.window_dir, win_id)
-        if not bundle_dir.exists():
-            raise FileNotFoundError(f"Missing density bundle for window {win_id}: {bundle_dir}")
-
         try:
-            window_spec = self._load_window_spec(bundle_dir)
-        except ValueError:
+            window_spec = self._load_window_spec(win_id)
+        except (FileNotFoundError, ValueError):
             return None
 
         try:
@@ -780,21 +790,43 @@ class WindowCapDataset(Dataset):
     # Lazy window loading
     # ------------------------------------------------------------------
 
-    def _load_window_spec(self, bundle_dir: Path) -> _WindowSpec:
-        meta = load_density_window_meta(bundle_dir)
-        if not meta.layer_names:
-            raise ValueError(f"Window {bundle_dir.name} has no layers")
+    def _load_window_spec(self, window_id: str) -> _WindowSpec:
+        entry = self._density_index.windows.get(str(window_id))
+        if entry is None:
+            raise FileNotFoundError(
+                f"Missing density shard entry for window {window_id}: {self.window_dir / 'index.json'}"
+            )
+        if not entry.layer_names:
+            raise ValueError(f"Window {window_id} has no layers")
+        bundle_dir = density_window_bundle_path(self.window_dir, entry.window_id)
         return _WindowSpec(
-            name=meta.window_id,
+            name=entry.window_id,
             bundle_dir=bundle_dir,
-            layer_names=meta.layer_names,
-            layer_has_density=meta.layer_has_density,
-            shape=meta.shape,
-            conductor_ids=load_density_window_conductor_map(bundle_dir),
+            layer_names=entry.layer_names,
+            layer_has_density=entry.layer_has_density,
+            shape=entry.shape,
+            conductor_ids=dict(entry.conductor_id_map),
+            shard_id=entry.shard_id,
+            shard_offset=entry.shard_offset,
         )
 
-    def _load_id_maps(self, window: _WindowSpec, *, mmap_mode: str | None = "r") -> np.ndarray:
-        id_maps = load_density_window_ids(window.bundle_dir, mmap_mode=mmap_mode)
+    def _load_id_maps(
+        self,
+        window: _WindowSpec,
+        *,
+        shard_id_maps: Optional[np.ndarray] = None,
+        mmap_mode: str | None = "r",
+    ) -> np.ndarray:
+        del mmap_mode
+        if shard_id_maps is None:
+            entry = self._density_index.windows[window.name]
+            _density_stack, shard_id_maps, shard_window_ids = read_density_window_shard(entry.shard_path)
+            if window.shard_offset >= len(shard_window_ids) or shard_window_ids[window.shard_offset] != window.name:
+                raise ValueError(
+                    f"Shard window order mismatch for {window.name}: "
+                    f"expected offset {window.shard_offset} in {entry.shard_path}"
+                )
+        id_maps = shard_id_maps[window.shard_offset]
         if tuple(int(v) for v in id_maps.shape) != window.shape:
             raise ValueError(
                 f"ID-map shape mismatch for {window.bundle_dir}: expected {window.shape}, got {id_maps.shape}"
@@ -804,32 +836,70 @@ class WindowCapDataset(Dataset):
     def _transform_id_maps(self, window: _WindowSpec, id_maps: np.ndarray) -> np.ndarray:
         return id_maps.astype(np.int32, copy=False)
 
-    def _load_density_for_cache(self, window: _WindowSpec) -> Optional[np.ndarray]:
-        density = load_density_window_density(window.bundle_dir, mmap_mode="r")
+    def _load_density_for_cache(
+        self,
+        window: _WindowSpec,
+        shard_density: Optional[np.ndarray] = None,
+    ) -> Optional[np.ndarray]:
+        if shard_density is None:
+            entry = self._density_index.windows[window.name]
+            shard_density, _id_stack, shard_window_ids = read_density_window_shard(entry.shard_path)
+            if window.shard_offset >= len(shard_window_ids) or shard_window_ids[window.shard_offset] != window.name:
+                raise ValueError(
+                    f"Shard window order mismatch for {window.name}: "
+                    f"expected offset {window.shard_offset} in {entry.shard_path}"
+                )
+        density = shard_density[window.shard_offset]
         if tuple(int(v) for v in density.shape) != window.shape:
             raise ValueError(
                 f"Density shape mismatch for {window.bundle_dir}: expected {window.shape}, got {density.shape}"
             )
         return density
 
-    def _load_cached_window_data(self, window: _WindowSpec) -> _CachedWindowData:
-        cached = self._window_cache.get(window.name)
+    def _load_cached_shard_data(self, window: _WindowSpec) -> _CachedShardData:
+        cached = self._shard_cache.get(window.shard_id)
         if cached is not None:
-            self._window_cache.move_to_end(window.name)
+            self._shard_cache.move_to_end(window.shard_id)
             return cached
 
-        id_maps = self._load_id_maps(window, mmap_mode="r")
+        entry = self._density_index.windows[window.name]
+        density_stack, id_stack, shard_window_ids = read_density_window_shard(entry.shard_path)
+        if window.shard_offset >= len(shard_window_ids) or shard_window_ids[window.shard_offset] != window.name:
+            raise ValueError(
+                f"Shard window order mismatch for {window.name}: "
+                f"expected offset {window.shard_offset} in {entry.shard_path}"
+            )
+        if density_stack.ndim != 4 or id_stack.ndim != 4:
+            raise ValueError(
+                f"Invalid shard tensor rank in {entry.shard_path}: "
+                f"density={density_stack.shape}, id={id_stack.shape}"
+            )
+
+        cached = _CachedShardData(
+            density=np.asarray(density_stack, dtype=np.float32),
+            id_maps=np.asarray(id_stack),
+            window_ids=tuple(shard_window_ids),
+        )
+        if self._window_cache_size > 0:
+            self._shard_cache[window.shard_id] = cached
+            self._shard_cache.move_to_end(window.shard_id)
+            while len(self._shard_cache) > self._window_cache_size:
+                self._shard_cache.popitem(last=False)
+        return cached
+
+    def _load_cached_window_data(self, window: _WindowSpec) -> _CachedWindowData:
+        shard = self._load_cached_shard_data(window)
+        cached = shard.windows.get(window.name)
+        if cached is not None:
+            return cached
+
+        id_maps = self._load_id_maps(window, shard_id_maps=shard.id_maps, mmap_mode=None)
         cached = _CachedWindowData(
-            density=self._load_density_for_cache(window),
+            density=self._load_density_for_cache(window, shard_density=shard.density),
             id_maps=id_maps,
             conductor_coords=self._build_conductor_coords(window, id_maps),
         )
-
-        if self._window_cache_size > 0:
-            self._window_cache[window.name] = cached
-            self._window_cache.move_to_end(window.name)
-            while len(self._window_cache) > self._window_cache_size:
-                self._window_cache.popitem(last=False)
+        shard.windows[window.name] = cached
         return cached
 
     def _build_conductor_coords(

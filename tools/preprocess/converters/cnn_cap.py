@@ -10,14 +10,11 @@ Usage:
     python cap3d_to_cnncap.py ../windows/cap3d/W0.cap3d --tech ../designs/tech/nangate45/nangate45_stack.yaml
     python cap3d_to_cnncap.py input.cap3d --tech tech.yaml --resolution 0.005
 
-Output: one density-window bundle directory per CAP3D window.
+Output: one shard-backed density_maps root per dataset split.
 
-Bundle structure:
-    meta.json: metadata and layer ordering
-    density.npy: float32 tensor shaped (L, H, W)
-    id.npy: int32 tensor shaped (L, H, W)
-    conductor_ids.npy: int32 conductor ids
-    conductor_names.json: conductor names aligned to conductor_ids.npy
+Shard structure:
+    index.json: split-wide metadata and window->shard mapping
+    shards/shard-00000.npz: compressed stacked tensors for 64 windows
 """
 
 import sys
@@ -29,7 +26,11 @@ from collections import defaultdict
 import yaml
 from tqdm import tqdm
 
-from capbench._internal.common.density_window_bundle import save_density_window_bundle
+from capbench._internal.common.density_window_bundle import (
+    DensityWindowShardWriter,
+    save_density_window_bundle,
+    save_density_window_shards,
+)
 from capbench.preprocess.cap3d_parser import StreamingCap3DParser
 from capbench.preprocess.cap3d_models import Block, Layer, Window, ParsedCap3DData
 from capbench._internal.common.tech_parser import get_conductor_layers, match_layers_by_height
@@ -42,6 +43,8 @@ SCALED_TARGET_SIZES = {
     "medium": 256,
     "large": 512,
 }
+DEFAULT_WINDOWS_PER_SHARD = 64
+DEFAULT_SHARD_SHUFFLE_SEED = 0
 
 
 class DensityMapGenerator:
@@ -529,13 +532,13 @@ class DensityMapGenerator:
                 })
 
     def save_bundle(self, output_dir: str | Path) -> Path:
-        """Write the generated density maps as a lazy-loadable window bundle."""
+        """Write one single-window shard-backed density dataset."""
         output_path = Path(output_dir)
         payload = self.build_bundle_data()
         return save_density_window_bundle(output_path, **payload)
 
     def build_bundle_data(self) -> Dict[str, object]:
-        """Build the density-window bundle payload without writing to disk."""
+        """Build one window payload without writing it to disk."""
         layer_list = list(self.tech_conductor_layers)
         density = np.zeros((len(layer_list), self.height_pixels, self.width_pixels), dtype=np.float32)
         id_maps = np.zeros((len(layer_list), self.height_pixels, self.width_pixels), dtype=np.int32)
@@ -735,7 +738,7 @@ Examples:
     parser.add_argument(
         '-o',
         '--output',
-        help='Output bundle directory (single input) or parent directory for per-window bundles',
+        help='Output density_maps root (single input may also point at <root>/<window_id>)',
     )
     parser.add_argument('-r', '--resolution', type=float, default=None,
                        help='Pixel resolution in microns (auto-computed for the selected grid size)')
@@ -776,63 +779,107 @@ Examples:
         print(f"ERROR: Failed to parse tech file: {exc}", file=sys.stderr)
         return 1
 
+    ordered_input_paths = sorted(input_paths, key=lambda path: path.stem)
+    if len(ordered_input_paths) > 1:
+        rng = np.random.default_rng(DEFAULT_SHARD_SHUFFLE_SEED)
+        order = rng.permutation(len(ordered_input_paths))
+        ordered_input_paths = [ordered_input_paths[int(idx)] for idx in order]
+
     # Initialize progress tracking
     successful_conversions = 0
     failed_conversions = []
+    output_root: Optional[Path] = None
+    shuffle_seed = DEFAULT_SHARD_SHUFFLE_SEED if len(ordered_input_paths) > 1 else None
+
+    for cap3d_path in ordered_input_paths:
+        if args.output:
+            if len(ordered_input_paths) == 1 and Path(args.output).name == cap3d_path.stem:
+                candidate_root = Path(args.output).parent
+            else:
+                candidate_root = Path(args.output)
+        else:
+            window_dirs = _resolve_dataset_dirs(cap3d_path)
+            output_key = 'density_maps_scaled' if args.scaled_output else 'density_maps'
+            candidate_root = window_dirs[output_key]
+
+        candidate_root = Path(candidate_root)
+        if output_root is None:
+            output_root = candidate_root
+        elif output_root.resolve() != candidate_root.resolve():
+            print(
+                f"ERROR: All inputs must target the same output root; got both "
+                f"{output_root} and {candidate_root}",
+                file=sys.stderr,
+            )
+            return 1
+
+    if output_root is None:
+        print("ERROR: No output root resolved for CNN conversion", file=sys.stderr)
+        return 1
 
     # Process windows with progress bar
-    pbar = tqdm(input_paths, desc="Converting CAP3D → Density Maps", unit="window",
-                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
+    pbar = tqdm(
+        ordered_input_paths,
+        desc="Converting CAP3D → Density Maps",
+        unit="window",
+        bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
+    )
 
-    for cap3d_path in pbar:
-        window_key = cap3d_path.stem
-        pbar.set_postfix_str(f"Window: {window_key}")
+    with DensityWindowShardWriter(
+        output_root,
+        windows_per_shard=DEFAULT_WINDOWS_PER_SHARD,
+        window_shuffle_seed=shuffle_seed,
+    ) as shard_writer:
+        for cap3d_path in pbar:
+            window_key = cap3d_path.stem
+            pbar.set_postfix_str(f"Window: {window_key}")
 
-        try:
-            resolved_target_size = _resolve_target_size(
-                cap3d_path,
-                target_size=args.target_size,
-                scaled_output=args.scaled_output,
-            )
-            generator = DensityMapGenerator(
-                str(cap3d_path),
-                str(tech_path),
-                pixel_resolution=args.resolution,
-                target_size=resolved_target_size,
-            )
-            generator.tech_conductor_layers = list(tech_layers)
-            generator.tech_z_heights = dict(tech_z_heights)
+            try:
+                payload = build_window_bundle_data(
+                    cap3d_path,
+                    tech_path,
+                    pixel_resolution=args.resolution,
+                    target_size=args.target_size,
+                    scaled_output=args.scaled_output,
+                )
+                shard_writer.add_window_payload(payload)
 
-            generator.parse_cap3d()
-            generator.match_layers()
-            generator.tighten_raster_bounds_to_conductors(selected_layers=generator.matched_layers)
-            generator.generate_density_maps()
+                if args.plot:
+                    resolved_target_size = _resolve_target_size(
+                        cap3d_path,
+                        target_size=args.target_size,
+                        scaled_output=args.scaled_output,
+                    )
+                    generator = DensityMapGenerator(
+                        str(cap3d_path),
+                        str(tech_path),
+                        pixel_resolution=args.resolution,
+                        target_size=resolved_target_size,
+                    )
+                    generator.tech_conductor_layers = list(tech_layers)
+                    generator.tech_z_heights = dict(tech_z_heights)
+                    generator.parse_cap3d()
+                    generator.match_layers()
+                    generator.tighten_raster_bounds_to_conductors(selected_layers=generator.matched_layers)
+                    generator.generate_density_maps()
 
-            if args.output:
-                if len(input_paths) == 1:
-                    window_output_bundle = Path(args.output)
-                else:
-                    window_output_bundle = Path(args.output) / window_key
-            else:
-                window_dirs = _resolve_dataset_dirs(cap3d_path)
-                output_key = 'density_maps_scaled' if args.scaled_output else 'density_maps'
-                window_output_bundle = window_dirs[output_key] / window_key
+                    plot_dir = Path(args.plot_dir) if args.plot_dir else output_root
+                    plot_dir.mkdir(parents=True, exist_ok=True)
+                    plot_path = plot_dir / f'{window_key}_visualization.png'
+                    generate_coarse_plot(window_key, generator, plot_path, args.coarse_size, args.dpi)
 
-            window_output_bundle.parent.mkdir(parents=True, exist_ok=True)
+                successful_conversions += 1
 
-            generator.save_bundle(window_output_bundle)
+            except Exception as exc:
+                failed_conversions.append((window_key, str(exc)))
+                continue
 
-            if args.plot:
-                plot_dir = Path(args.plot_dir) if args.plot_dir else window_output_bundle.parent
-                plot_dir.mkdir(parents=True, exist_ok=True)
-                plot_path = plot_dir / f'{window_key}_visualization.png'
-                generate_coarse_plot(window_key, generator, plot_path, args.coarse_size, args.dpi)
-
-            successful_conversions += 1
-
-        except Exception as exc:
-            failed_conversions.append((window_key, str(exc)))
-            continue
+        if successful_conversions > 0:
+            try:
+                shard_writer.finalize()
+            except Exception as exc:
+                print(f"ERROR: Failed to write shard-backed density maps: {exc}", file=sys.stderr)
+                return 1
 
     # Final status report
     if failed_conversions:
@@ -902,55 +949,26 @@ def _normalize_layer_name(name: str) -> str:
     return ''.join(ch for ch in str(name).lower() if ch.isalnum())
 
 
-def convert_window(
+def build_window_bundle_data(
     cap3d_path: Path,
     tech_path: Path,
     *,
     pixel_resolution: Optional[float] = None,
-    output_bundle: Optional[Path] = None,
-    plot: bool = False,
-    plot_dir: Optional[Path] = None,
-    coarse_size: int = 30,
-    dpi: int = 150,
     dataset_dirs: Optional[Dict[str, Path]] = None,
     target_size: Optional[int] = None,
     scaled_output: bool = False,
     selected_layers: Optional[Sequence[str]] = None,
-) -> Path:
-    """
-    Generate a density-window bundle (and optional plot) for a window.
-
-    Args:
-        cap3d_path: Input CAP3D file.
-        tech_path: Technology stack YAML describing conductor order.
-        pixel_resolution: Microns per pixel for generated density maps.
-        output_bundle: Optional override for the window bundle destination directory.
-        plot: Whether to emit a coarse visualization.
-        plot_dir: Directory for visualization PNGs (default: alongside the density_maps root).
-        coarse_size: Coarse grid resolution for visualization.
-        dpi: DPI for visualization PNGs.
-        target_size: Optional explicit square output grid size.
-        scaled_output: Whether to infer 128/256/512 by size bucket and default to density_maps_scaled/.
-
-    Returns:
-        Path to the generated bundle directory.
-
-    """
+) -> Dict[str, object]:
+    """Generate one in-memory window payload without writing it to disk."""
     cap3d_path = Path(cap3d_path)
     tech_path = Path(tech_path)
 
-    # Determine dataset directories, defaulting to the CAP3D file's dataset
-    dataset_dirs = _resolve_dataset_dirs(cap3d_path, dataset_dirs)
+    _dataset_dirs = _resolve_dataset_dirs(cap3d_path, dataset_dirs)
     resolved_target_size = _resolve_target_size(
         cap3d_path,
         target_size=target_size,
         scaled_output=scaled_output,
     )
-    if output_bundle is None:
-        output_key = "density_maps_scaled" if scaled_output else "density_maps"
-        output_bundle = dataset_dirs[output_key] / cap3d_path.stem
-
-    output_bundle.parent.mkdir(parents=True, exist_ok=True)
 
     generator = DensityMapGenerator(
         str(cap3d_path),
@@ -970,14 +988,109 @@ def convert_window(
     generator.match_layers()
     generator.tighten_raster_bounds_to_conductors(selected_layers=generator.matched_layers)
     generator.generate_density_maps()
+    return generator.build_bundle_data()
 
-    saved_bundle = generator.save_bundle(output_bundle)
+
+def save_window_bundle_data(
+    output_root: Path | str,
+    window_payloads: Sequence[Dict[str, object]],
+    *,
+    windows_per_shard: int = DEFAULT_WINDOWS_PER_SHARD,
+    shuffle_windows: bool = True,
+    shuffle_seed: int = DEFAULT_SHARD_SHUFFLE_SEED,
+) -> Path:
+    """Write one shard-backed density_maps root from precomputed window payloads."""
+    return save_density_window_shards(
+        output_root,
+        window_payloads,
+        windows_per_shard=windows_per_shard,
+        shuffle_windows=shuffle_windows,
+        shuffle_seed=shuffle_seed,
+    )
+
+
+def convert_window(
+    cap3d_path: Path,
+    tech_path: Path,
+    *,
+    pixel_resolution: Optional[float] = None,
+    output_bundle: Optional[Path] = None,
+    plot: bool = False,
+    plot_dir: Optional[Path] = None,
+    coarse_size: int = 30,
+    dpi: int = 150,
+    dataset_dirs: Optional[Dict[str, Path]] = None,
+    target_size: Optional[int] = None,
+    scaled_output: bool = False,
+    selected_layers: Optional[Sequence[str]] = None,
+) -> Path:
+    """
+    Generate one single-window shard-backed density dataset (and optional plot).
+
+    Args:
+        cap3d_path: Input CAP3D file.
+        tech_path: Technology stack YAML describing conductor order.
+        pixel_resolution: Microns per pixel for generated density maps.
+        output_bundle: Optional override for the output root or virtual window path.
+        plot: Whether to emit a coarse visualization.
+        plot_dir: Directory for visualization PNGs (default: alongside the density_maps root).
+        coarse_size: Coarse grid resolution for visualization.
+        dpi: DPI for visualization PNGs.
+        target_size: Optional explicit square output grid size.
+        scaled_output: Whether to infer 128/256/512 by size bucket and default to density_maps_scaled/.
+
+    Returns:
+        Virtual path to the generated window inside the shard-backed root.
+
+    """
+    cap3d_path = Path(cap3d_path)
+    tech_path = Path(tech_path)
+
+    # Determine dataset directories, defaulting to the CAP3D file's dataset
+    dataset_dirs = _resolve_dataset_dirs(cap3d_path, dataset_dirs)
+    if output_bundle is None:
+        output_key = "density_maps_scaled" if scaled_output else "density_maps"
+        output_bundle = dataset_dirs[output_key] / cap3d_path.stem
+    output_bundle = Path(output_bundle)
+    output_root = output_bundle.parent if output_bundle.name == cap3d_path.stem else output_bundle
+
+    payload = build_window_bundle_data(
+        cap3d_path,
+        tech_path,
+        pixel_resolution=pixel_resolution,
+        dataset_dirs=dataset_dirs,
+        target_size=target_size,
+        scaled_output=scaled_output,
+        selected_layers=selected_layers,
+    )
+    saved_bundle = save_density_window_bundle(output_bundle, **payload)
 
     if plot:
-        resolved_plot_dir = plot_dir or output_bundle.parent
+        resolved_plot_dir = plot_dir or output_root
         resolved_plot_dir.mkdir(parents=True, exist_ok=True)
         plot_path = resolved_plot_dir / f"{cap3d_path.stem}_visualization.png"
-        generate_coarse_plot(cap3d_path.stem, generator, plot_path, coarse_size, dpi)
+        plot_generator = DensityMapGenerator(
+            str(cap3d_path),
+            str(tech_path),
+            pixel_resolution=pixel_resolution,
+            target_size=_resolve_target_size(
+                cap3d_path,
+                target_size=target_size,
+                scaled_output=scaled_output,
+            ),
+        )
+        tech_layers, tech_z_heights = get_conductor_layers(str(tech_path))
+        if selected_layers is not None:
+            requested = {_normalize_layer_name(layer) for layer in selected_layers}
+            tech_layers = [layer for layer in tech_layers if _normalize_layer_name(layer) in requested]
+            tech_z_heights = {layer: tech_z_heights[layer] for layer in tech_layers}
+        plot_generator.tech_conductor_layers = list(tech_layers)
+        plot_generator.tech_z_heights = dict(tech_z_heights)
+        plot_generator.parse_cap3d()
+        plot_generator.match_layers()
+        plot_generator.tighten_raster_bounds_to_conductors(selected_layers=plot_generator.matched_layers)
+        plot_generator.generate_density_maps()
+        generate_coarse_plot(cap3d_path.stem, plot_generator, plot_path, coarse_size, dpi)
 
     return saved_bundle
 

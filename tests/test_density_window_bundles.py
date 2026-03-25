@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import json
 import sys
 import unittest
-import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -14,10 +14,12 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from capbench._internal.common.density_window_bundle import (
-    META_FILENAME,
+    INDEX_FILENAME,
+    density_window_bundle_path,
+    discover_density_window_ids,
     load_density_window_density,
     load_density_window_meta,
-    save_density_window_bundle,
+    save_density_window_shards,
 )
 
 try:
@@ -55,7 +57,7 @@ _SPEF_TEXT = """*SPEF "ieee 1481-1999"
 """
 
 
-def _write_window_bundle(root: Path, window_id: str, *, offset: float = 0.0) -> Path:
+def _make_window_payload(window_id: str, *, offset: float = 0.0) -> dict[str, object]:
     density = np.zeros((2, 2, 2), dtype=np.float32)
     density[0, 0, 0] = 0.5 + offset
     density[1, 1, 1] = 0.75 + offset
@@ -64,25 +66,42 @@ def _write_window_bundle(root: Path, window_id: str, *, offset: float = 0.0) -> 
     id_maps[0, 0, 0] = 1
     id_maps[1, 1, 1] = 2
 
-    bundle_dir = root / "density_maps" / window_id
-    bundle_dir.parent.mkdir(parents=True, exist_ok=True)
-    save_density_window_bundle(
-        bundle_dir,
-        window_id=window_id,
-        layer_names=["M1", "M2"],
-        layer_has_density=[True, True],
-        density=density,
-        id_maps=id_maps,
-        conductor_id_map={"NET_A": 1, "NET_B": 2},
-        window_bounds=[0.0, 0.0, 0.0, 2.0, 2.0, 2.0],
-        pixel_resolution=0.5,
-        raster_trim_applied=False,
+    return {
+        "window_id": window_id,
+        "layer_names": ["M1", "M2"],
+        "layer_has_density": [True, True],
+        "density": density,
+        "id_maps": id_maps,
+        "conductor_id_map": {"NET_A": 1, "NET_B": 2},
+        "window_bounds": [0.0, 0.0, 0.0, 2.0, 2.0, 2.0],
+        "pixel_resolution": 0.5,
+        "raster_trim_applied": False,
+    }
+
+
+def _write_density_dataset(
+    root: Path,
+    window_ids: list[str],
+    *,
+    windows_per_shard: int = 64,
+    offsets: dict[str, float] | None = None,
+    shuffle_windows: bool = False,
+) -> None:
+    payloads = [
+        _make_window_payload(window_id, offset=(offsets or {}).get(window_id, 0.0))
+        for window_id in window_ids
+    ]
+    save_density_window_shards(
+        root / "density_maps",
+        payloads,
+        windows_per_shard=windows_per_shard,
+        shuffle_windows=shuffle_windows,
     )
 
     labels_dir = root / "labels_rwcap"
     labels_dir.mkdir(parents=True, exist_ok=True)
-    (labels_dir / f"{window_id}.spef").write_text(_SPEF_TEXT, encoding="utf-8")
-    return bundle_dir
+    for window_id in window_ids:
+        (labels_dir / f"{window_id}.spef").write_text(_SPEF_TEXT, encoding="utf-8")
 
 
 class DensityWindowBundleTests(unittest.TestCase):
@@ -90,7 +109,7 @@ class DensityWindowBundleTests(unittest.TestCase):
     def test_density_dataset_is_lazy_and_highlights_self_samples(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            _write_window_bundle(root, "W0")
+            _write_density_dataset(root, ["W0"])
 
             dataset = WindowCapDataset(
                 window_dir=root / "density_maps",
@@ -101,10 +120,10 @@ class DensityWindowBundleTests(unittest.TestCase):
             )
 
             self.assertEqual(len(dataset), 2)
-            self.assertEqual(len(dataset._window_cache), 0)
+            self.assertEqual(len(dataset._shard_cache), 0)
 
             items = [dataset[idx] for idx in range(len(dataset))]
-            self.assertEqual(len(dataset._window_cache), 1)
+            self.assertEqual(len(dataset._shard_cache), 1)
             self.assertEqual(sorted(float(target.item()) for _, target, _ in items), [3.0, 4.0])
 
             by_positive = {meta["positive_conductors"]: tensor for tensor, _, meta in items}
@@ -117,7 +136,7 @@ class DensityWindowBundleTests(unittest.TestCase):
     def test_density_dataset_coupling_sample_keeps_positive_and_negative_highlights(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            _write_window_bundle(root, "W0")
+            _write_density_dataset(root, ["W0"])
 
             dataset = WindowCapDataset(
                 window_dir=root / "density_maps",
@@ -138,7 +157,7 @@ class DensityWindowBundleTests(unittest.TestCase):
     def test_id_map_dataset_uses_binary_occupancy_features(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            _write_window_bundle(root, "W0")
+            _write_density_dataset(root, ["W0"])
 
             dataset = IdMapWindowDataset(
                 window_dir=root / "density_maps",
@@ -151,26 +170,59 @@ class DensityWindowBundleTests(unittest.TestCase):
             self.assertIn(float(target.item()), {3.0, 4.0})
             self.assertTrue(np.isin(tensor.numpy(), [0.0, 1.0, 2.0]).all())
 
-    def test_bundle_metadata_and_density_round_trip(self) -> None:
+    def test_shard_metadata_and_density_round_trip(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            bundle_dir = _write_window_bundle(root, "W0")
+            _write_density_dataset(root, ["W0", "W1"], windows_per_shard=2)
 
-            meta = load_density_window_meta(bundle_dir)
-            density = load_density_window_density(bundle_dir, mmap_mode=None)
-            raw_meta = json.loads((bundle_dir / META_FILENAME).read_text(encoding="utf-8"))
+            window_ref = density_window_bundle_path(root / "density_maps", "W0")
+            meta = load_density_window_meta(window_ref)
+            density = load_density_window_density(window_ref, mmap_mode=None)
+            raw_index = json.loads((root / "density_maps" / INDEX_FILENAME).read_text(encoding="utf-8"))
 
             self.assertEqual(list(meta.layer_names), ["M1", "M2"])
             self.assertEqual(density.shape, (2, 2, 2))
             self.assertAlmostEqual(meta.pixel_resolution, 0.5, places=5)
-            self.assertEqual(raw_meta["window_id"], "W0")
+            self.assertEqual(raw_index["windows"]["W0"]["shard_id"], 0)
+            self.assertEqual(discover_density_window_ids(root / "density_maps"), ["W0", "W1"])
 
-    @unittest.skipIf(torch is None, "PyTorch is required for dataset materialization tests")
-    def test_grouped_sampler_batches_samples_by_window(self) -> None:
+    def test_shard_rollover_uses_fixed_window_count(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            _write_window_bundle(root, "W0", offset=0.0)
-            _write_window_bundle(root, "W1", offset=0.1)
+            _write_density_dataset(root, ["W0", "W1", "W2"], windows_per_shard=2)
+            raw_index = json.loads((root / "density_maps" / INDEX_FILENAME).read_text(encoding="utf-8"))
+
+            self.assertEqual(raw_index["windows"]["W0"]["shard_id"], 0)
+            self.assertEqual(raw_index["windows"]["W1"]["shard_id"], 0)
+            self.assertEqual(raw_index["windows"]["W2"]["shard_id"], 1)
+
+    def test_shard_writer_can_shuffle_windows_deterministically(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_density_dataset(
+                root,
+                ["W0", "W1", "W2", "W3"],
+                windows_per_shard=2,
+                shuffle_windows=True,
+            )
+            raw_index = json.loads((root / "density_maps" / INDEX_FILENAME).read_text(encoding="utf-8"))
+
+            self.assertEqual(raw_index["window_shuffle_seed"], 0)
+            self.assertEqual(raw_index["windows"]["W2"]["shard_id"], 0)
+            self.assertEqual(raw_index["windows"]["W0"]["shard_id"], 0)
+            self.assertEqual(raw_index["windows"]["W1"]["shard_id"], 1)
+            self.assertEqual(raw_index["windows"]["W3"]["shard_id"], 1)
+
+    @unittest.skipIf(torch is None, "PyTorch is required for dataset materialization tests")
+    def test_grouped_sampler_batches_windows_by_shard(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_density_dataset(
+                root,
+                ["W0", "W1", "W2"],
+                windows_per_shard=2,
+                offsets={"W0": 0.0, "W1": 0.1, "W2": 0.2},
+            )
 
             dataset = WindowCapDataset(
                 window_dir=root / "density_maps",
@@ -180,8 +232,8 @@ class DensityWindowBundleTests(unittest.TestCase):
             )
             train_dataset, _, _ = create_window_level_splits(
                 dataset,
-                train_ratio=0.5,
-                val_ratio=0.5,
+                train_ratio=1.0,
+                val_ratio=0.0,
                 test_ratio=0.0,
                 random_seed=0,
             )
@@ -194,9 +246,14 @@ class DensityWindowBundleTests(unittest.TestCase):
             )
 
             batches = list(iter(sampler))
-            self.assertEqual(len(batches), 1)
-            start, end = train_dataset.get_window_sample_ranges()[0]
-            self.assertEqual(batches[0], list(range(start, end)))
+            shard_ids = train_dataset.get_window_shard_ids()
+            shard_sequence = []
+            for batch in batches:
+                window_idx, _sample_idx = train_dataset._get_sample_indices(batch[0])  # pylint: disable=protected-access
+                shard_sequence.append(shard_ids[window_idx])
+
+            self.assertEqual(shard_sequence[:2], [0, 0])
+            self.assertEqual(shard_sequence[-1], 1)
 
 
 if __name__ == "__main__":

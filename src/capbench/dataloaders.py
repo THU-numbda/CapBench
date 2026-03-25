@@ -30,6 +30,15 @@ def resolve_cached_dataset(dataset: str | Path, *, artifacts: Sequence[str] = ()
     return resolve_dataset_path(dataset, artifacts=artifacts)
 
 
+def _resolve_window_shard_ids(dataset) -> Optional[list[int]]:
+    if hasattr(dataset, "get_window_shard_ids"):
+        return [int(shard_id) for shard_id in dataset.get_window_shard_ids()]
+    base = getattr(dataset, "base", None)
+    if base is not None and hasattr(base, "get_window_shard_ids"):
+        return [int(shard_id) for shard_id in base.get_window_shard_ids()]
+    return None
+
+
 def load_density_window_dataset(
     dataset: str | Path,
     *,
@@ -107,10 +116,25 @@ class WindowGroupedBatchSampler(Sampler[list[int]]):
 
     def __iter__(self) -> Iterator[list[int]]:
         ranges = list(self.dataset.get_window_sample_ranges())
+        shard_ids = _resolve_window_shard_ids(self.dataset)
         rng = random.Random(self.seed + self._epoch)
-        window_order = list(range(len(ranges)))
-        if self.shuffle:
-            rng.shuffle(window_order)
+        if shard_ids is not None and len(shard_ids) == len(ranges):
+            shard_to_windows: dict[int, list[int]] = {}
+            for window_idx, shard_id in enumerate(shard_ids):
+                shard_to_windows.setdefault(int(shard_id), []).append(window_idx)
+            shard_order = list(shard_to_windows.keys())
+            if self.shuffle:
+                rng.shuffle(shard_order)
+            window_order: list[int] = []
+            for shard_id in shard_order:
+                shard_windows = list(shard_to_windows[shard_id])
+                if self.shuffle:
+                    rng.shuffle(shard_windows)
+                window_order.extend(shard_windows)
+        else:
+            window_order = list(range(len(ranges)))
+            if self.shuffle:
+                rng.shuffle(window_order)
 
         for window_idx in window_order:
             start, end = ranges[window_idx]

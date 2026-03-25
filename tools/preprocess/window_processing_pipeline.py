@@ -21,6 +21,8 @@ import re
 import time
 import gc
 import traceback
+from contextlib import nullcontext
+import numpy as np
 from tqdm import tqdm
 try:
     import psutil
@@ -186,6 +188,8 @@ class WindowExtractor:
         self._selected_layer_cache: Dict[Tuple[Path, str, str], Optional[List[str]]] = {}
         self._ignored_gds_layers_cache: Dict[Path, Set[int]] = {}
         self._lef_resolution_cache: Dict[Tuple[Path, str], List[str]] = {}
+        self._cnn_shard_writer = None
+        self._cnn_generated_windows = 0
 
         # Load multi-design configuration
         self.designs = self.load_multi_design_yaml()
@@ -309,6 +313,17 @@ class WindowExtractor:
         if not self.stage_counters:
             return
 
+        existing_cnn_windows: Set[str] = set()
+        if 'cnn' in self.stage_counters:
+            try:
+                from capbench._internal.common.density_window_bundle import load_density_window_index
+
+                existing_cnn_windows = set(
+                    load_density_window_index(self.dataset_dirs['density_maps']).windows.keys()
+                )
+            except FileNotFoundError:
+                existing_cnn_windows = set()
+
         for window in self.all_windows:
             outputs = window.get('outputs') or self._build_output_paths(window['name'])
             if 'gds' in self.stage_counters and self._has_gds_outputs(outputs):
@@ -317,7 +332,7 @@ class WindowExtractor:
                 self.stage_counters['cap3d']['existing_pre'] += 1
             if 'pct' in self.stage_counters and outputs['pct'].exists():
                 self.stage_counters['pct']['existing_pre'] += 1
-            if 'cnn' in self.stage_counters and outputs['cnn'].exists():
+            if 'cnn' in self.stage_counters and window['name'] in existing_cnn_windows:
                 self.stage_counters['cnn']['existing_pre'] += 1
 
     def _stage_label(self, stage: str) -> str:
@@ -1883,20 +1898,23 @@ class WindowExtractor:
                     print(f"    PCT conversion failed for {name}: {e}")
                     print(traceback.format_exc(), end="")
 
-        if self._should_run_conversion_stage('cnn', outputs['cnn']):
+        if self.should_run_stage('cnn'):
             if not cap3d_path.exists():
                 print(f"    CAP3D file not found for CNN conversion: {name}: {cap3d_path}")
             else:
                 try:
-                    from tools.preprocess.converters.cnn_cap import convert_window as convert_cnn_window
+                    from tools.preprocess.converters.cnn_cap import build_window_bundle_data
 
-                    convert_cnn_window(
+                    payload = build_window_bundle_data(
                         cap3d_path,
                         window_entry['stack_file'],
                         dataset_dirs=self.dataset_dirs,
                         selected_layers=selected_layers,
                     )
-                    self._record_stage_generated('cnn')
+                    if self._cnn_shard_writer is None:
+                        raise RuntimeError("CNN shard writer is not initialized")
+                    self._cnn_shard_writer.add_window_payload(payload)
+                    self._cnn_generated_windows += 1
                 except Exception as e:
                     print(f"    CNN conversion failed for {name}: {e}")
                     print(traceback.format_exc(), end="")
@@ -2167,33 +2185,62 @@ class WindowExtractor:
                 design_groups[design_name] = []
             design_groups[design_name].append(window)
 
-        # Process each design with its own progress bar
-        for design_name, design_windows in design_groups.items():
-            # Create progress bar for this design
-            pbar = tqdm(total=len(design_windows), desc=f"{design_name}", unit="windows")
+        cnn_writer_context = nullcontext()
+        if self.should_run_stage('cnn'):
+            from capbench._internal.common.density_window_bundle import DensityWindowShardWriter
 
-            # Process windows sequentially for this design
-            for window_entry in design_windows:
-                try:
-                    # Process the window (this will call the main processing logic)
-                    self._process_window(window_entry)
-                    self._update_progress(completed=True)
-                except Exception as e:
-                    self._update_progress(failed=True)
-                    print(f"  Failed to process window {window_entry['name']}: {e}")
-                    print(traceback.format_exc(), end="")
+            cnn_writer_context = DensityWindowShardWriter(
+                self.dataset_dirs['density_maps'],
+                windows_per_shard=64,
+                window_shuffle_seed=0,
+            )
 
-                # Update progress bar
+        with cnn_writer_context as cnn_writer:
+            self._cnn_shard_writer = cnn_writer
+            self._cnn_generated_windows = 0
+            cnn_shuffle_rng = np.random.default_rng(0) if self.should_run_stage('cnn') else None
+
+            # Process each design with its own progress bar
+            for design_name, design_windows in design_groups.items():
+                ordered_design_windows = list(design_windows)
+                if cnn_shuffle_rng is not None and len(ordered_design_windows) > 1:
+                    ordered_design_windows.sort(key=lambda item: item['name'])
+                    order = cnn_shuffle_rng.permutation(len(ordered_design_windows))
+                    ordered_design_windows = [ordered_design_windows[int(idx)] for idx in order]
+
+                # Create progress bar for this design
+                pbar = tqdm(total=len(ordered_design_windows), desc=f"{design_name}", unit="windows")
+
+                # Process windows sequentially for this design
+                for window_entry in ordered_design_windows:
+                    try:
+                        # Process the window (this will call the main processing logic)
+                        self._process_window(window_entry)
+                        self._update_progress(completed=True)
+                    except Exception as e:
+                        self._update_progress(failed=True)
+                        print(f"  Failed to process window {window_entry['name']}: {e}")
+                        print(traceback.format_exc(), end="")
+
+                    # Update progress bar
+                    if pbar:
+                        pbar.update(1)
+
                 if pbar:
-                    pbar.update(1)
+                    pbar.close()
 
-            if pbar:
-                pbar.close()
+                # Clear caches to free memory before processing next design
+                self.clear_caches()
 
-            # Clear caches to free memory before processing next design
-            self.clear_caches()
-
-        # All formats generated per window during processing
+            if cnn_writer is not None and self._cnn_generated_windows > 0:
+                try:
+                    cnn_writer.finalize()
+                    if 'cnn' in self.stage_counters:
+                        self.stage_counters['cnn']['generated'] = self._cnn_generated_windows
+                except Exception as e:
+                    print(f"Failed to write CNN shard outputs: {e}")
+                    print(traceback.format_exc(), end="")
+            self._cnn_shard_writer = None
 
         # Calculate and display summary statistics
         self._display_summary()

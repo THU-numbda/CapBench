@@ -20,7 +20,7 @@ from .window_density_dataset import _CachedWindowData, _WindowSpec, WindowCapDat
 class IdMapWindowDataset(WindowCapDataset):
     """
     Drop-in replacement for ``WindowCapDataset`` on the U-Net path, backed by
-    `id.npy` conductor maps from density-window bundles.
+    shard-backed conductor ID maps under ``density_maps/``.
 
     When ``trim_margin=True``, the loader crops each window to the occupied
     conductor bounding box and resizes it back to the original grid. This keeps
@@ -101,7 +101,13 @@ class IdMapWindowDataset(WindowCapDataset):
             return self._trim_and_resize_id_maps(transformed)
         return transformed
 
-    def _load_density_for_cache(self, window: _WindowSpec) -> Optional[np.ndarray]:
+    def _load_density_for_cache(
+        self,
+        window: _WindowSpec,
+        shard_density: Optional[np.ndarray] = None,
+    ) -> Optional[np.ndarray]:
+        del window
+        del shard_density
         return None
 
     def _fill_base_features(
