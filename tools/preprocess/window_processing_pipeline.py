@@ -267,7 +267,7 @@ class WindowExtractor:
             'def': self.def_output_dir / f"{window_name}.def",
             'cap3d': self.cap3d_output_dir / f"{window_name}.cap3d",
             'pct': self.dataset_dirs['point_clouds'] / f"{window_name}.npz",
-            'cnn': self.dataset_dirs['density_maps'] / f"{window_name}.npz",
+            'cnn': self.dataset_dirs['density_maps'] / window_name,
         }
 
     def _load_lef_macro_sizes(self, stack_file: Path, tech_node: Optional[str]) -> Dict[str, Tuple[float, float]]:

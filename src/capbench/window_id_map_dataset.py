@@ -1,36 +1,30 @@
 """
 ID-map-backed window dataset loader for CAP3D-backed or compact window artifacts.
 
-This loader reads window NPZ files that store `{layer}_idx` conductor ID maps
-(`0` = empty/background, `1..N` = conductors present in the window). It reuses
-the existing WindowCapDataset label parsing and grouped-case logic, but
-synthesizes binary occupancy features from the ID maps instead of loading
-legacy float density grids from disk.
+This variant reuses the lazy density-window indexing in ``WindowCapDataset`` but
+materializes binary occupancy features from the conductor ID maps instead of the
+stored density tensor. It is intended for U-Net style segmentation pipelines.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Optional, Sequence
 
 import numpy as np
 
 from capbench._internal.common.datasets import DENSITY_MAPS_DIR
-from .window_density_dataset import (
-    WindowCapDataset,
-    _WindowData,
-)
+from .window_density_dataset import _CachedWindowData, _WindowSpec, WindowCapDataset
 
 
 class IdMapWindowDataset(WindowCapDataset):
     """
-    Drop-in replacement for WindowCapDataset on the U-Net path, backed by
-    window NPZ files that contain conductor ID maps and metadata.
+    Drop-in replacement for ``WindowCapDataset`` on the U-Net path, backed by
+    `id.npy` conductor maps from density-window bundles.
 
-    When `trim_margin=True`, the loader crops each window to the occupied
-    conductor bounding box and resizes it back to the original grid. This is
-    useful for CAP3D-backed `density_maps/` artifacts that still include the
-    older CAP3D window margins.
+    When ``trim_margin=True``, the loader crops each window to the occupied
+    conductor bounding box and resizes it back to the original grid. This keeps
+    the previous CAP3D margin-trimming behavior while remaining lazy.
     """
 
     def __init__(
@@ -45,6 +39,7 @@ class IdMapWindowDataset(WindowCapDataset):
         required_layers: Optional[Sequence[str]] = None,
         build_workers: int = 0,
         trim_margin: bool = False,
+        window_cache_size: int = 4,
     ):
         self._trim_margin = bool(trim_margin)
         super().__init__(
@@ -57,17 +52,15 @@ class IdMapWindowDataset(WindowCapDataset):
             solver_preference=solver_preference,
             required_layers=required_layers,
             build_workers=build_workers,
+            window_cache_size=window_cache_size,
         )
 
     @staticmethod
-    def _find_content_bbox(id_maps: Sequence[np.ndarray]) -> Optional[tuple[int, int, int, int]]:
-        if not id_maps:
+    def _find_content_bbox(id_maps: np.ndarray) -> Optional[tuple[int, int, int, int]]:
+        if id_maps.ndim != 3 or id_maps.size == 0:
             return None
 
-        occupied = np.zeros(id_maps[0].shape, dtype=bool)
-        for id_map in id_maps:
-            occupied |= id_map > 0
-
+        occupied = np.any(id_maps > 0, axis=0)
         if not bool(np.any(occupied)):
             return None
 
@@ -90,50 +83,37 @@ class IdMapWindowDataset(WindowCapDataset):
         x_idx = np.clip(x_idx, 0, src_w - 1)
         return id_map[y_idx[:, None], x_idx[None, :]].astype(np.int32, copy=False)
 
-    def _trim_and_resize_id_maps(self, id_maps: Sequence[np.ndarray]) -> List[np.ndarray]:
+    def _trim_and_resize_id_maps(self, id_maps: np.ndarray) -> np.ndarray:
         bbox = self._find_content_bbox(id_maps)
         if bbox is None:
-            return [id_map.astype(np.int32, copy=False) for id_map in id_maps]
+            return id_maps.astype(np.int32, copy=False)
 
         y0, y1, x0, x1 = bbox
-        trimmed: List[np.ndarray] = []
-        for id_map in id_maps:
-            cropped = id_map[y0:y1, x0:x1]
-            trimmed.append(self._resize_id_map_nearest(cropped, id_map.shape))
+        trimmed = np.zeros_like(id_maps, dtype=np.int32)
+        for layer_idx in range(id_maps.shape[0]):
+            cropped = id_maps[layer_idx, y0:y1, x0:x1]
+            trimmed[layer_idx] = self._resize_id_map_nearest(cropped, id_maps[layer_idx].shape)
         return trimmed
 
-    def _load_window(self, npz_path: Path) -> _WindowData:
-        with np.load(npz_path, allow_pickle=True) as data:
-            raw_layers = [str(layer) for layer in data["layers"]]
-            layer_names: List[str] = []
-            id_maps: List[np.ndarray] = []
+    def _transform_id_maps(self, window: _WindowSpec, id_maps: np.ndarray) -> np.ndarray:
+        transformed = id_maps.astype(np.int32, copy=False)
+        if self._trim_margin:
+            return self._trim_and_resize_id_maps(transformed)
+        return transformed
 
-            for layer in raw_layers:
-                id_map = data[f"{layer}_idx"].astype(np.int32, copy=False)
-                layer_names.append(layer)
-                id_maps.append(id_map)
+    def _load_density_for_cache(self, window: _WindowSpec) -> Optional[np.ndarray]:
+        return None
 
-            if not layer_names:
-                raise ValueError(f"Window {npz_path.stem} has no layers")
-
-            if self._trim_margin:
-                id_maps = self._trim_and_resize_id_maps(id_maps)
-
-            densities: List[np.ndarray] = [
-                (id_map > 0).astype(np.float32, copy=False)
-                for id_map in id_maps
-            ]
-
-            conductor_ids: Dict[str, int] = {}
-            if "conductor_names" in data and "conductor_ids" in data:
-                for name, cid in zip(data["conductor_names"], data["conductor_ids"]):
-                    actual = str(name)
-                    conductor_ids[actual] = int(cid)
-
-        return _WindowData(
-            name=npz_path.stem,
-            layer_names=layer_names,
-            densities=densities,
-            id_maps=id_maps,
-            conductor_ids=conductor_ids,
-        )
+    def _fill_base_features(
+        self,
+        features: np.ndarray,
+        window: _WindowSpec,
+        cached: _CachedWindowData,
+    ) -> None:
+        for local_idx, layer_name in enumerate(window.layer_names):
+            global_idx = self._layer_index.get(layer_name)
+            if global_idx is None:
+                continue
+            layer_density = (cached.id_maps[local_idx] > 0).astype(np.float32, copy=False)
+            h, w = layer_density.shape
+            features[global_idx, :h, :w] = layer_density

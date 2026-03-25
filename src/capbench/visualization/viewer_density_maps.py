@@ -2,13 +2,14 @@
 """
 Interactive VTK viewer for CapBench density maps with optional CAP3D overlay.
 
-Given a density-map NPZ (as produced by `converters/cnn_cap.py`), this tool
-renders each per-layer density image as a translucent slice positioned at the
-corresponding physical Z height. When a CAP3D file is supplied, the script also
-draws a faint 3D rendering of the underlying geometry to provide context.
+Given a density-window bundle directory (as produced by `converters/cnn_cap.py`),
+this tool renders each per-layer density image as a translucent slice
+positioned at the corresponding physical Z height. When a CAP3D file is
+supplied, the script also draws a faint 3D rendering of the underlying geometry
+to provide context.
 
 Usage:
-    python cap3d_density_viewer.py density_map.npz [--cap3d design.cap3d]
+    python cap3d_density_viewer.py density_maps/W0 [--cap3d design.cap3d]
 """
 
 import argparse
@@ -20,6 +21,10 @@ from typing import Dict, List, Optional, Tuple, Set
 
 import numpy as np
 
+from capbench._internal.common.density_window_bundle import (
+    load_density_window_density,
+    load_density_window_meta,
+)
 from capbench.visualization._common import (
     ensure_repo_root_on_path,
     apply_start_angle,
@@ -50,7 +55,7 @@ PALETTE: Tuple[Tuple[int, int, int], ...] = (
 
 @dataclass
 class DensityDataset:
-    """In-memory representation of a CapBench density NPZ file."""
+    """In-memory representation of a CapBench density-window bundle."""
 
     path: Path
     layers: List[str]
@@ -77,37 +82,24 @@ class Cap3DMetadata:
     via_blocks: Dict[str, List]
 
 
-def load_density_npz(path: Path) -> DensityDataset:
-    """Load density map NPZ data from disk."""
+def load_density_bundle(path: Path) -> DensityDataset:
+    """Load density-window bundle data from disk."""
     if not path.exists():
-        raise FileNotFoundError(f"Density map file not found: {path}")
+        raise FileNotFoundError(f"Density map bundle not found: {path}")
 
-    data = np.load(path, allow_pickle=True)
-
-    try:
-        layers = [str(layer) for layer in data["layers"].tolist()]
-    except KeyError as exc:
-        raise KeyError("NPZ file missing required 'layers' array") from exc
+    meta = load_density_window_meta(path)
+    density_tensor = load_density_window_density(path, mmap_mode="r")
 
     density_maps: Dict[str, np.ndarray] = {}
-    for layer in layers:
-        key = f"{layer}_img"
-        if key not in data:
-            raise KeyError(f"NPZ file missing density image for layer '{layer}' (expected key '{key}')")
-        # Ensure data is stored as float64/float32 for VTK
-        arr = np.asarray(data[key], dtype=np.float32)
-        density_maps[layer] = arr
+    for layer_idx, layer_name in enumerate(meta.layer_names):
+        density_maps[layer_name] = np.asarray(density_tensor[layer_idx], dtype=np.float32)
 
-    pixel_resolution = float(np.asarray(data["pixel_resolution"]).item())
-    window_bounds = tuple(float(v) for v in np.asarray(data["window_bounds"]).tolist())
-    if len(window_bounds) != 6:
-        raise ValueError("window_bounds must contain six values [xmin, ymin, zmin, xmax, ymax, zmax]")
-
+    window_bounds = tuple(float(v) for v in meta.window_bounds)
     return DensityDataset(
         path=path,
-        layers=layers,
+        layers=list(meta.layer_names),
         density_maps=density_maps,
-        pixel_resolution=pixel_resolution,
+        pixel_resolution=float(meta.pixel_resolution),
         window_bounds=window_bounds,  # type: ignore[arg-type]
     )
 
@@ -550,7 +542,7 @@ def launch_viewer(renderer: "vtk.vtkRenderer", start_angle: float, screenshot: O
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Visualize CapBench density maps with optional CAP3D overlay.")
-    parser.add_argument("density_map", help="Path to density-map NPZ produced by converters/cnn_cap.py")
+    parser.add_argument("density_map", help="Path to density-window bundle produced by converters/cnn_cap.py")
     parser.add_argument("--cap3d", help="Optional CAP3D file for faint geometry overlay")
     parser.add_argument("--max-blocks", type=int, default=40000, help="Limit number of CAP3D blocks rendered (0 = no limit)")
     parser.add_argument("--cap3d-opacity", type=float, default=0.18, help="Opacity of CAP3D overlay (0.0-1.0)")
@@ -561,7 +553,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 def main(args: argparse.Namespace) -> None:
     try:
-        dataset = load_density_npz(Path(args.density_map))
+        dataset = load_density_bundle(Path(args.density_map))
     except Exception as exc:
         print(f"ERROR: failed to load density map: {exc}")
         sys.exit(1)

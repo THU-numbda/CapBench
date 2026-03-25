@@ -148,6 +148,7 @@ class WindowSubsetDataset(Dataset):
     def _build_sample_mapping(self):
         """Build mapping for efficient sample access."""
         self.sample_mapping = []
+        self._window_sample_ranges = []
 
         # Map window IDs to indices in base dataset
         window_to_index = {wid: i for i, wid in enumerate(self.base_dataset.get_window_ids())}
@@ -162,8 +163,10 @@ class WindowSubsetDataset(Dataset):
             if hasattr(self.base_dataset, '_window_samples'):
                 # CNN-Cap style
                 window_samples = self.base_dataset._window_samples[window_idx]
+                start = len(self.sample_mapping)
                 for sample_idx in range(len(window_samples)):
                     self.sample_mapping.append((window_idx, sample_idx))
+                self._window_sample_ranges.append((start, len(self.sample_mapping)))
             else:
                 # Fallback for other dataset types
                 # This would need to be implemented based on specific dataset structure
@@ -190,3 +193,7 @@ class WindowSubsetDataset(Dataset):
     def get_window_ids(self):
         """Return window IDs for this subset."""
         return self.window_ids.copy()
+
+    def get_window_sample_ranges(self):
+        """Return contiguous sample ranges for each window in subset order."""
+        return list(self._window_sample_ranges)

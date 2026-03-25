@@ -19,7 +19,7 @@ def visualize_density(dataset: str | Path, *, window_id: str, extra_args: Sequen
     from .visualization import viewer_density_maps
 
     dataset_root = resolve_dataset_path(dataset, artifacts=["density_maps"])
-    density_map = dataset_root / "density_maps" / f"{window_id}.npz"
+    density_map = dataset_root / "density_maps" / window_id
     if not density_map.exists():
         raise FileNotFoundError(f"Density map not found: {density_map}")
 

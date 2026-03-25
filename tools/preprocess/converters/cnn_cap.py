@@ -10,20 +10,14 @@ Usage:
     python cap3d_to_cnncap.py ../windows/cap3d/W0.cap3d --tech ../designs/tech/nangate45/nangate45_stack.yaml
     python cap3d_to_cnncap.py input.cap3d --tech tech.yaml --resolution 0.005
 
-Output: Automatically saved to data/ directory
+Output: one density-window bundle directory per CAP3D window.
 
-NPZ File Structure:
-    Per-layer arrays (for each conductor layer):
-        {layer}_img: float64 density map (1.0 = occupied, 0.0 = empty)
-        {layer}_idx: int32 ID map (0 = background, >0 = conductor ID)
-
-    Global arrays:
-        layers:           object array of layer names
-        conductor_names:  object array mapping index → conductor name
-        conductor_ids:    int32 array mapping index → conductor ID
-        window_bounds:    [x_min, y_min, z_min, x_max, y_max, z_max]
-        source_window_bounds: original CAP3D window bounds before conductor-tight rasterization
-        pixel_resolution: microns per pixel
+Bundle structure:
+    meta.json: metadata and layer ordering
+    density.npy: float32 tensor shaped (L, H, W)
+    id.npy: int32 tensor shaped (L, H, W)
+    conductor_ids.npy: int32 conductor ids
+    conductor_names.json: conductor names aligned to conductor_ids.npy
 """
 
 import sys
@@ -33,9 +27,9 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Sequence, Set
 from collections import defaultdict
 import yaml
-from datetime import datetime
 from tqdm import tqdm
 
+from capbench._internal.common.density_window_bundle import save_density_window_bundle
 from capbench.preprocess.cap3d_parser import StreamingCap3DParser
 from capbench.preprocess.cap3d_models import Block, Layer, Window, ParsedCap3DData
 from capbench._internal.common.tech_parser import get_conductor_layers, match_layers_by_height
@@ -534,65 +528,56 @@ class DensityMapGenerator:
                     'sample_position': sample_pos
                 })
 
-    def save_npz(self, output_file: str):
-        """
-        Save density maps and conductor metadata to NPZ file
+    def save_bundle(self, output_dir: str | Path) -> Path:
+        """Write the generated density maps as a lazy-loadable window bundle."""
+        output_path = Path(output_dir)
+        payload = self.build_bundle_data()
+        return save_density_window_bundle(output_path, **payload)
 
-        Saves per-layer density/ID maps plus conductor name↔ID lookup tables.
-        The conductor lookup arrays enable querying by conductor name without
-        loading a separate metadata file.
+    def build_bundle_data(self) -> Dict[str, object]:
+        """Build the density-window bundle payload without writing to disk."""
+        layer_list = list(self.tech_conductor_layers)
+        density = np.zeros((len(layer_list), self.height_pixels, self.width_pixels), dtype=np.float32)
+        id_maps = np.zeros((len(layer_list), self.height_pixels, self.width_pixels), dtype=np.int32)
+        layer_has_density: List[bool] = []
 
-        Output NPZ contains:
-            - {layer}_img: density maps (float64)
-            - {layer}_idx: conductor ID maps (int32)
-            - conductor_names: array of conductor names (object)
-            - conductor_ids: array of conductor IDs (int32)
-            - layers: list of layer names
-            - window_bounds: bounding box coordinates
-            - pixel_resolution: microns per pixel
-        """
-        output_path = Path(output_file)
-        data = self.build_npz_data()
-        np.savez_compressed(output_path, **data)
-        return output_path
+        for layer_idx, layer_name in enumerate(layer_list):
+            layer_payload = self.density_maps.get(layer_name)
+            if layer_payload is None:
+                layer_has_density.append(False)
+                continue
 
-    def build_npz_data(self) -> Dict[str, np.ndarray]:
-        """Build NPZ data dictionary without writing to disk."""
-        data: Dict[str, np.ndarray] = {}
-
-        # Use tech file layer order which already includes interleaved vias
-        layer_list = self.tech_conductor_layers
-        data['layers'] = np.array(layer_list, dtype=object)
-        data['conductor_layers'] = np.array(layer_list, dtype=object)
-
-        for layer_name in layer_list:
-            if layer_name in self.density_maps:
-                density_map, id_map = self.density_maps[layer_name]
-                data[f'{layer_name}_img'] = density_map.astype(np.float64, copy=False)
-                data[f'{layer_name}_idx'] = id_map.astype(np.int32, copy=False)
+            density_map, id_map = layer_payload
+            density[layer_idx] = np.asarray(density_map, dtype=np.float32)
+            id_maps[layer_idx] = np.asarray(id_map, dtype=np.int32)
+            layer_has_density.append(bool(np.any(density_map)))
 
         z_min = self.window.v1[2] if self.window else 0.0
         z_max = self.window.v2[2] if self.window else 0.0
-        data['window_bounds'] = np.array([
-            self.x_min, self.y_min, z_min,
-            self.x_max, self.y_max, z_max
-        ], dtype=np.float64)
-        data['pixel_resolution'] = np.array(self.pixel_resolution, dtype=np.float64)
-        data['raster_trim_applied'] = np.array(1 if self.raster_trim_applied else 0, dtype=np.uint8)
 
-        if self.source_window_bounds is not None:
-            data['source_window_bounds'] = np.array(self.source_window_bounds, dtype=np.float64)
-
-        if self.conductor_id_map:
-            conductor_names = []
-            conductor_ids = []
-            for name, cid in sorted(self.conductor_id_map.items(), key=lambda x: x[1]):
-                conductor_names.append(name)
-                conductor_ids.append(cid)
-            data['conductor_names'] = np.array(conductor_names, dtype=object)
-            data['conductor_ids'] = np.array(conductor_ids, dtype=np.int32)
-
-        return data
+        return {
+            "window_id": self.window.name if self.window else self.cap3d_file.stem,
+            "layer_names": layer_list,
+            "layer_has_density": layer_has_density,
+            "density": density,
+            "id_maps": id_maps,
+            "conductor_id_map": dict(self.conductor_id_map),
+            "window_bounds": [
+                float(self.x_min),
+                float(self.y_min),
+                float(z_min),
+                float(self.x_max),
+                float(self.y_max),
+                float(z_max),
+            ],
+            "pixel_resolution": float(self.pixel_resolution),
+            "raster_trim_applied": bool(self.raster_trim_applied),
+            "source_window_bounds": (
+                None
+                if self.source_window_bounds is None
+                else [float(v) for v in self.source_window_bounds]
+            ),
+        }
 
     def save_metadata_yaml(self, output_file: str):
         """Save conductor metadata to YAML file"""
@@ -741,7 +726,7 @@ def main():
 Examples:
   python cap3d_to_cnncap.py windows/W0.cap3d --tech designs/tech/nangate45/nangate45_stack.yaml
   python cap3d_to_cnncap.py windows/W0.cap3d windows/W1.cap3d --tech designs/tech/nangate45/nangate45_stack.yaml --plot
-  python cap3d_to_cnncap.py windows/W0.cap3d windows/W1.cap3d ... windows/W9.cap3d --tech tech.yaml --output batch.npz
+  python cap3d_to_cnncap.py windows/W0.cap3d windows/W1.cap3d ... windows/W9.cap3d --tech tech.yaml --output batch_density_maps
         """
     )
 
@@ -750,7 +735,7 @@ Examples:
     parser.add_argument(
         '-o',
         '--output',
-        help='Output NPZ file or directory (default: dataset density_maps/ or density_maps_scaled/)',
+        help='Output bundle directory (single input) or parent directory for per-window bundles',
     )
     parser.add_argument('-r', '--resolution', type=float, default=None,
                        help='Pixel resolution in microns (auto-computed for the selected grid size)')
@@ -824,21 +809,21 @@ Examples:
             generator.generate_density_maps()
 
             if args.output:
-                if len(input_paths) == 1 and Path(args.output).suffix:
-                    window_output_npz = Path(args.output)
+                if len(input_paths) == 1:
+                    window_output_bundle = Path(args.output)
                 else:
-                    window_output_npz = Path(args.output) / f'{window_key}.npz'
+                    window_output_bundle = Path(args.output) / window_key
             else:
                 window_dirs = _resolve_dataset_dirs(cap3d_path)
                 output_key = 'density_maps_scaled' if args.scaled_output else 'density_maps'
-                window_output_npz = window_dirs[output_key] / f'{window_key}.npz'
+                window_output_bundle = window_dirs[output_key] / window_key
 
-            window_output_npz.parent.mkdir(parents=True, exist_ok=True)
+            window_output_bundle.parent.mkdir(parents=True, exist_ok=True)
 
-            saved_npz = Path(generator.save_npz(str(window_output_npz)))
+            generator.save_bundle(window_output_bundle)
 
             if args.plot:
-                plot_dir = Path(args.plot_dir) if args.plot_dir else window_output_npz.parent
+                plot_dir = Path(args.plot_dir) if args.plot_dir else window_output_bundle.parent
                 plot_dir.mkdir(parents=True, exist_ok=True)
                 plot_path = plot_dir / f'{window_key}_visualization.png'
                 generate_coarse_plot(window_key, generator, plot_path, args.coarse_size, args.dpi)
@@ -922,7 +907,7 @@ def convert_window(
     tech_path: Path,
     *,
     pixel_resolution: Optional[float] = None,
-    output_npz: Optional[Path] = None,
+    output_bundle: Optional[Path] = None,
     plot: bool = False,
     plot_dir: Optional[Path] = None,
     coarse_size: int = 30,
@@ -933,22 +918,22 @@ def convert_window(
     selected_layers: Optional[Sequence[str]] = None,
 ) -> Path:
     """
-    Generate a CNNCap density map NPZ (and optional plot) for a window.
+    Generate a density-window bundle (and optional plot) for a window.
 
     Args:
         cap3d_path: Input CAP3D file.
         tech_path: Technology stack YAML describing conductor order.
         pixel_resolution: Microns per pixel for generated density maps.
-        output_npz: Optional override for NPZ destination.
+        output_bundle: Optional override for the window bundle destination directory.
         plot: Whether to emit a coarse visualization.
-        plot_dir: Directory for visualization PNGs (default: alongside NPZ).
+        plot_dir: Directory for visualization PNGs (default: alongside the density_maps root).
         coarse_size: Coarse grid resolution for visualization.
         dpi: DPI for visualization PNGs.
         target_size: Optional explicit square output grid size.
         scaled_output: Whether to infer 128/256/512 by size bucket and default to density_maps_scaled/.
 
     Returns:
-        Path to the generated NPZ.
+        Path to the generated bundle directory.
 
     """
     cap3d_path = Path(cap3d_path)
@@ -961,11 +946,11 @@ def convert_window(
         target_size=target_size,
         scaled_output=scaled_output,
     )
-    if output_npz is None:
+    if output_bundle is None:
         output_key = "density_maps_scaled" if scaled_output else "density_maps"
-        output_npz = dataset_dirs[output_key] / f"{cap3d_path.stem}.npz"
+        output_bundle = dataset_dirs[output_key] / cap3d_path.stem
 
-    output_npz.parent.mkdir(parents=True, exist_ok=True)
+    output_bundle.parent.mkdir(parents=True, exist_ok=True)
 
     generator = DensityMapGenerator(
         str(cap3d_path),
@@ -986,15 +971,15 @@ def convert_window(
     generator.tighten_raster_bounds_to_conductors(selected_layers=generator.matched_layers)
     generator.generate_density_maps()
 
-    saved_npz = Path(generator.save_npz(str(output_npz)))
+    saved_bundle = generator.save_bundle(output_bundle)
 
     if plot:
-        resolved_plot_dir = plot_dir or output_npz.parent
+        resolved_plot_dir = plot_dir or output_bundle.parent
         resolved_plot_dir.mkdir(parents=True, exist_ok=True)
         plot_path = resolved_plot_dir / f"{cap3d_path.stem}_visualization.png"
         generate_coarse_plot(cap3d_path.stem, generator, plot_path, coarse_size, dpi)
 
-    return saved_npz
+    return saved_bundle
 
 
 
