@@ -29,7 +29,7 @@ dependencies:
   # YAML Processing
   - pyyaml>=6.0
 
-  # GMSH (for GNN-Cap mesh generation and cap3d_mesh.py)
+  # GMSH (for GNN-Cap mesh generation)
   - gmsh>=4.11.0
   - python-gmsh>=1.0.0
 

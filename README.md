@@ -6,7 +6,7 @@ The supported user-facing surface is:
 
 - cached dataset download and inspection
 - standardized dataloader access for CAP3D-backed density maps and density-map ID maps
-- visualization for CAP3D, density maps, and point clouds
+- visualization for CAP3D
 
 The following flows remain in the repository, but are considered developer-only tooling rather than the default product:
 
@@ -54,8 +54,6 @@ This downloads and extracts the whole PDK archive into the shared cache, then re
 4. Open a visualization:
 
 ```bash
-python -m capbench visualize density --dataset nangate45/small --window W0
-python -m capbench visualize point-cloud --dataset nangate45/small --window W0
 python -m capbench visualize cap3d --dataset nangate45/small --window W0
 ```
 
@@ -101,8 +99,6 @@ Loaders and visualization commands do not generate or download artifacts implici
 ### Visualization
 
 ```bash
-python -m capbench visualize density --dataset nangate45/small --window W0
-python -m capbench visualize point-cloud --dataset nangate45/small --window W0
 python -m capbench visualize cap3d --dataset nangate45/small --window W0
 ```
 
