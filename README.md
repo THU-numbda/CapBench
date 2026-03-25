@@ -108,7 +108,6 @@ Developer-only flows live under the repo-local `tools/` namespace and are not pa
 
 ```bash
 python -m tools.preprocess.window_processing_pipeline --windows-file /abs/path/windows.yaml --dataset-path /abs/path/dataset --pipeline cnn
-python -m tools.maintenance.partition_cap3d --dataset-path /abs/path/dataset
 python -m tools.maintenance.openrcx --process-nodes nangate45 --sizes small
 python -m tools.maintenance.rwcap --rwcap-bin /abs/path/to/rwcap --process-nodes nangate45 --sizes small --jobs 8
 python -m tools.maintenance.window_metadata --help

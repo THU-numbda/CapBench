@@ -30,7 +30,6 @@ def get_dataset_subdirs(dataset_path: Optional[Path] = None) -> Dict[str, Path]:
 
     return {
         'cap3d': base_path / "cap3d",
-        'cap3d_split': base_path / "cap3d_split",
         'gds': base_path / "gds",
         'def': base_path / "def",
         'point_clouds': base_path / "point_clouds",
