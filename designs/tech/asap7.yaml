@@ -1,0 +1,67 @@
+# ASAP7 Technology Stack - ITF-derived unified structure
+# Bottom → top stack with dielectrics and metals interleaved
+
+# Unified stack (bottom → top) - dielectrics and metals interleaved
+stack:
+  - { name: STI, type: dielectric, thickness_um: 0.05, er: 3.9 }
+  - { name: PMD0, type: dielectric, thickness_um: 0.038, er: 3.9 }
+  - { name: GATE_OXIDE, type: dielectric, thickness_um: 0.0016, er: 7.8 }
+  - { name: GATE_HIGH_K, type: dielectric, thickness_um: 0.001, er: 21.0 }
+  - { name: SPACER, type: dielectric, thickness_um: 0.009, er: 4.0 }
+  - { name: PMD1, type: dielectric, thickness_um: 0.019, er: 3.9 }
+  - { name: PMD2, type: dielectric, thickness_um: 0.021, er: 3.9 }
+  - { name: PMD3, type: dielectric, thickness_um: 0.027, er: 3.9 }
+  - { name: LISD_TO_M2_PART1, type: dielectric, thickness_um: 0.021, er: 3.9 }
+  - { name: LISD_TO_M2_PART2, type: dielectric, thickness_um: 0.002, er: 4.8 }
+  - { name: LISD_TO_M2_PART3, type: dielectric, thickness_um: 0.036, er: 2.9 }
+  - { name: M1, type: metal, thickness_um: 0.036, wmin_um: 0.018 }
+  - { name: M1_TO_M2_PART1, type: dielectric, thickness_um: 0.036, er: 2.9 }
+  - { name: M1_TO_M2_PART2, type: dielectric, thickness_um: 0.002, er: 4.8 }
+  - { name: M1_TO_M2_PART3, type: dielectric, thickness_um: 0.034, er: 2.9 }
+  - { name: M2, type: metal, thickness_um: 0.036, wmin_um: 0.018 }
+  - { name: M2_TO_M3_PART1, type: dielectric, thickness_um: 0.036, er: 2.9 }
+  - { name: M2_TO_M3_PART2, type: dielectric, thickness_um: 0.002, er: 4.8 }
+  - { name: M2_TO_M3_PART3, type: dielectric, thickness_um: 0.034, er: 2.9 }
+  - { name: M3, type: metal, thickness_um: 0.036, wmin_um: 0.018 }
+  - { name: M3_TO_M4_PART1, type: dielectric, thickness_um: 0.036, er: 2.9 }
+  - { name: M3_TO_M4_PART2, type: dielectric, thickness_um: 0.002, er: 4.8 }
+  - { name: M3_TO_M4_PART3, type: dielectric, thickness_um: 0.034, er: 2.9 }
+  - { name: M4, type: metal, thickness_um: 0.048, wmin_um: 0.024 }
+  - { name: M4_TO_M5_PART1, type: dielectric, thickness_um: 0.048, er: 2.9 }
+  - { name: M4_TO_M5_PART2, type: dielectric, thickness_um: 0.002, er: 4.8 }
+  - { name: M4_TO_M5_PART3, type: dielectric, thickness_um: 0.046, er: 2.9 }
+  - { name: M5, type: metal, thickness_um: 0.048, wmin_um: 0.024 }
+  - { name: M5_TO_M6_PART1, type: dielectric, thickness_um: 0.048, er: 2.9 }
+  - { name: M5_TO_M6_PART2, type: dielectric, thickness_um: 0.002, er: 4.8 }
+  - { name: M5_TO_M6_PART3, type: dielectric, thickness_um: 0.046, er: 2.9 }
+  - { name: M6, type: metal, thickness_um: 0.064, wmin_um: 0.032 }
+  - { name: M6_TO_M7_PART1, type: dielectric, thickness_um: 0.064, er: 2.9 }
+  - { name: M6_TO_M7_PART2, type: dielectric, thickness_um: 0.002, er: 4.8 }
+  - { name: M6_TO_M7_PART3, type: dielectric, thickness_um: 0.062, er: 2.9 }
+  - { name: M7, type: metal, thickness_um: 0.064, wmin_um: 0.032 }
+  - { name: M7_TO_M8_PART1, type: dielectric, thickness_um: 0.064, er: 2.9 }
+  - { name: M7_TO_M8_PART2, type: dielectric, thickness_um: 0.002, er: 4.8 }
+  - { name: M7_TO_M8_PART3, type: dielectric, thickness_um: 0.062, er: 2.9 }
+  - { name: M8, type: metal, thickness_um: 0.08, wmin_um: 0.04 }
+  - { name: M8_TO_M9_PART1, type: dielectric, thickness_um: 0.08, er: 2.9 }
+  - { name: M8_TO_M9_PART2, type: dielectric, thickness_um: 0.002, er: 4.8 }
+  - { name: M8_TO_M9_PART3, type: dielectric, thickness_um: 0.078, er: 2.9 }
+  - { name: M9, type: metal, thickness_um: 0.08, wmin_um: 0.04 }
+  - { name: TOP_AIR, type: dielectric, thickness_um: 5.0, er: 1.0 }
+
+# Vias with connectivity and minimum widths only
+vias:
+  V1: { from: M1, to: M2, wmin_um: 0.018 }
+  V2: { from: M2, to: M3, wmin_um: 0.018 }
+  V3: { from: M3, to: M4, wmin_um: 0.018 }
+  V4: { from: M4, to: M5, wmin_um: 0.024 }
+  V5: { from: M5, to: M6, wmin_um: 0.024 }
+  V6: { from: M6, to: M7, wmin_um: 0.032 }
+  V7: { from: M7, to: M8, wmin_um: 0.032 }
+  V8: { from: M8, to: M9, wmin_um: 0.04 }
+
+metadata:
+  tech_node: asap7
+  source_itf: asap7.itf
+  layermap_source: asap7.layermap
+  description: "ASAP7 technology stack with unified dielectric/metal structure and original layer names"

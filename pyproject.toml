@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "capbench"
+version = "0.2.0"
+description = "CapBench library for cached datasets, standardized dataloaders, and visualization."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "CapBench contributors" }
+]
+dependencies = [
+  "numpy>=1.24",
+  "PyYAML>=6.0",
+  "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+baselines = [
+  "einops",
+  "medpy",
+  "monai",
+  "ptflops",
+  "pytorch-lightning",
+  "tensorboardx",
+  "timm",
+  "torch",
+  "yacs",
+]
+vis = [
+  "matplotlib>=3.7",
+  "vtk>=9.2",
+]
+dev = [
+  "klayout",
+  "psutil",
+  "pyvis",
+  "rich",
+  "rtree",
+]
+all = [
+  "einops",
+  "klayout",
+  "matplotlib>=3.7",
+  "medpy",
+  "monai",
+  "psutil",
+  "ptflops",
+  "pytorch-lightning",
+  "pyvis",
+  "rich",
+  "rtree",
+  "tensorboardx",
+  "timm",
+  "torch",
+  "vtk>=9.2",
+  "yacs",
+]
+
+[project.scripts]
+capbench = "capbench.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = [
+  "capbench",
+  "capbench.*",
+]
+
+[tool.setuptools.package-data]
+"capbench" = [
+  "data/*.json",
+  "resources/tech/*",
+]
+"capbench._internal.common" = ["native/*"]

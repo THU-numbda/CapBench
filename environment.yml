@@ -1,0 +1,151 @@
+name: cap3d-ml
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Python
+  - python=3.9
+
+  # PyTorch (CUDA 11.8) - Core ML framework for all three approaches
+  - pytorch=2.0.1
+  - torchvision=0.15.2
+  - torchaudio=2.0.2
+  - pytorch-cuda=11.8
+  # For CPU-only: replace pytorch-cuda with 'cpuonly'
+
+  # Scientific Computing
+  - numpy>=1.23.0
+  - scipy>=1.10.0
+  - pandas>=1.5.0
+  - scikit-learn>=1.2.0
+
+  # Visualization
+  - matplotlib>=3.6.0
+  - vtk>=9.2.0  # For cap3d_view.py 3D visualization
+
+  # YAML Processing
+  - pyyaml>=6.0
+
+  # GMSH (for GNN-Cap mesh generation)
+  - gmsh>=4.11.0
+  - python-gmsh>=1.0.0
+
+  # Build Tools (for SPEF utilities)
+  - cmake>=3.20
+  - pybind11>=2.10.0
+  - cxx-compiler
+
+  # Progress Bars and Logging
+  - tqdm>=4.64.0
+  - tensorboard>=2.11.0
+  - psutil>=5.9.0
+
+  # Network Visualization (for GNN-Cap)
+  - networkx>=2.8.0
+
+  # Jupyter (optional, for analysis notebooks)
+  - jupyter
+  - ipython
+
+  # Note: full KLayout/PyA is still required separately for the window pipeline
+  # and CAP3D generation scripts (`import pya`). See the post-install notes below.
+
+  # Pip packages (not available or better via pip)
+  - pip
+  - pip:
+    # PyTorch Geometric (for GNN-Cap) - Updated versions
+    - torch-geometric>=2.4.0
+    - torch-scatter>=2.1.1
+    - torch-sparse>=0.6.17
+    - torch-cluster>=1.6.1
+
+    # GNN-Cap Modernization Dependencies
+    - pytorch-lightning>=2.1.0     # Simplified training loops
+    - rich>=13.0.0                # Pretty console output
+
+    # Spatial indexing for optimized graph construction
+    - rtree>=1.0.0                # R-tree spatial index for O(n log n) edge construction
+
+    # PCT-Cap specific dependencies
+    - einops>=0.6.1      # Tensor operations
+    - timm>=0.9.2        # PyTorch Image Models
+    - yacs>=0.1.8        # Yet Another Configuration System
+    - tensorboardx>=2.6  # TensorBoard logging
+    - medpy>=0.4.0       # Medical image processing utilities
+
+    # GNN-Cap visualization
+    - pyvis>=0.3.1       # Interactive network visualization
+
+    # Static model complexity reporting
+    - ptflops>=0.7.4     # FLOP/MAC estimation for pre-run model stats
+    - monai>=1.3.0       # MONAI U-Net backend for architecture ablation studies
+    - onnx>=1.15.0       # ONNX export for TensorRT engine compilation
+
+# Post-installation notes:
+#
+# 1. Environment Setup:
+#    # Create environment
+#    conda env create -f environment.yml
+#
+#    # Activate environment
+#    conda activate cap3d-ml
+#
+# 2. KLayout Installation:
+#    Full KLayout/PyA support is NOT provided by this environment file and must
+#    be installed separately so that `import pya` works for the window pipeline
+#    and CAP3D generation tools:
+#      - Ubuntu/Debian: sudo apt install klayout
+#      - macOS: brew install klayout
+#      - Windows: Download from https://www.klayout.de/
+#    After installation, verify: python -c "import pya; print('KLayout/PyA OK')"
+#
+# 3. SPEF Utilities (required for GNN-Cap training):
+#    Build the native Parser-SPEF module:
+#      cd utils
+#      cmake -S spef_bindings -B spef_build
+#      cmake --build spef_build
+#      export PYTHONPATH="$PWD/spef_build:$PYTHONPATH"
+#
+# 4. GPU Support:
+#    For NVIDIA GPU acceleration, ensure CUDA 11.8 is installed:
+#      nvidia-smi  # Check CUDA version
+#    If using a different CUDA version, adjust pytorch-cuda version accordingly.
+#    For CPU-only, replace 'pytorch-cuda=11.8' with 'cpuonly' in dependencies.
+#
+# 5. Verify Installation:
+#    python -c "import torch; print(f'PyTorch: {torch.__version__}')"
+#    python -c "import onnx; print(f'ONNX: {onnx.__version__}')"
+#    python -c "import torch_geometric; print(f'PyG: {torch_geometric.__version__}')"
+#    python -c "import pytorch_lightning; print(f'Lightning: {pytorch_lightning.__version__}')"
+#    python -c "import psutil; print(f'psutil: {psutil.__version__}')"
+#    python -c "import pya; print('KLayout/PyA OK')"
+#    python -c "import gmsh; print(f'GMSH: {gmsh.__version__}')"
+#    python -c "import vtk; print(f'VTK: {vtk.vtkVersion.GetVTKVersion()}')"
+#
+# 6. TensorRT Full-Pipeline Support:
+#    TensorRT Python bindings are required separately for full-pipeline engine compilation/runtime.
+#    For CUDA 12.x environments, install:
+#      python -m pip install --upgrade onnx tensorrt-cu12
+#    Then verify with:
+#      python -c "import onnx, tensorrt as trt; print(f'ONNX: {onnx.__version__} TensorRT: {trt.__version__}')"
+#
+# 7. GNN-Cap Quick Start:
+#    # Train total capacitance model (recommended approach)
+#    cd GNN
+#    python train.py --model-type total --epochs 50 --lr 0.005
+#
+#    # Train both total and coupling models
+#    python train.py --model-type both --epochs 50
+#
+# 7. CAP3D Pipeline Quick Start:
+#    # Generate CAP3D from GDS/DEF
+#    klayout -b -zz -r cap3d_generation.py --gds design.gds --def design.def
+#
+#    # Generate training graphs
+#    python GNN/cap3d_to_gnncap.py design.cap3d
+#
+#    # Visualize CAP3D (3D viewer)
+#    python cap3d_view.py design.cap3d

@@ -1,0 +1,16 @@
+# SKY130HD Layermap
+# Generated from LYT file using generate_layermaps.py
+# Using original ITF naming conventions
+# Only metal layers and vias included (sub-li1 layers removed)
+
+67/20 : li1 (67/20)
+67/44 : mcon (67/44)  # mcon - poly to li1 contact
+68/20 : met1 (68/20)
+68/44 : via (68/44)   # via1 is called "via" in ITF
+69/20 : met2 (69/20)
+69/44 : via2 (69/44)
+70/20 : met3 (70/20)
+70/44 : via3 (70/44)
+71/20 : met4 (71/20)
+71/44 : via4 (71/44)
+72/20 : met5 (72/20)
