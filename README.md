@@ -18,9 +18,6 @@ The following flows remain in the repository, but are considered developer-only 
 
 Reference material such as development scripts, baseline projects, and upstream flow snapshots now lives under `reference/` and is not part of the installable package.
 
-> [!WARNING]
-> **Repository Status**: This repository is being mirrored by a different repository that is currently under review for a conference. Please **do not push any changes directly to the main branch**. Use feature branches or forks for development work.
-
 ## Quickstart After Clone
 
 1. Install the library into the current Python environment:
@@ -141,4 +138,3 @@ The built-in registry currently includes:
 Each PDK archive currently exposes the `small`, `medium`, and `large` dataset splits.
 
 If you change what an archive contains, update `src/capbench/data/datasets.json` so the cached dataset metadata matches what is actually bundled.
-
