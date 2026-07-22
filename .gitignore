@@ -13,3 +13,8 @@ simc28.itf
 smic28.itf
 experiments/**/out/
 experiments/**/out_strict/
+checkpoints/
+diagnostics/
+logs/
+runs/
+saved_models/

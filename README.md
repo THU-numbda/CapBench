@@ -1,12 +1,14 @@
 # CapBench
 
-CapBench is a pip-first Python library for cached layout datasets, standardized dataloaders, and visualization.
+CapBench is a pip-first Python library for cached layout datasets, standardized
+dataloaders, visualization, and maintained CNN/PCT/GNN training baselines.
 
 The supported user-facing surface is:
 
 - cached dataset download and inspection
 - standardized dataloader access for CAP3D-backed density maps and density-map ID maps
 - visualization for CAP3D
+- paper-like CNN, PCT, GCN, GAT, and GATv2 training recipes
 
 The following flows remain in the repository, but are considered developer-only tooling rather than the default product:
 
@@ -16,7 +18,10 @@ The following flows remain in the repository, but are considered developer-only 
 - density exploration
 - RWCap maintenance helpers
 
-Reference material such as development scripts, baseline projects, and upstream flow snapshots now lives under `reference/` and is not part of the installable package.
+Reference material such as development scripts, historical baseline snapshots,
+and upstream flow snapshots lives under `reference/` and is not part of the
+installable package. Runnable baselines live under `models/` and use the public
+`capbench.*` data interfaces.
 
 ## Quickstart After Clone
 
@@ -30,6 +35,12 @@ If you also want visualization extras and the repo-local developer tools availab
 
 ```bash
 python -m pip install -e ".[all]"
+```
+
+For model training without visualization/developer extras:
+
+```bash
+python -m pip install -e ".[baselines]"
 ```
 
 Using `python -m pip` ensures the install targets the active interpreter. This works the same way in a conda environment, a standard Python virtual environment, or directly inside your container.
@@ -57,8 +68,31 @@ python -m capbench visualize cap3d --dataset nangate45/small --window W0
 ## Repository Layout
 
 - `src/capbench/`: the only installable Python package
+- `models/`: maintained CNN, PCT, and GNN model/training entrypoints
+- `recipes/paper/`: checked-in Nangate45 and Sky130HD baseline configurations
 - `tools/`: repo-local developer tools for dataset authoring and maintenance
 - `reference/`: development scripts, historical baselines, and flow snapshots kept for provenance
+
+## Paper-like baseline training
+
+Each validated PDK/model pair has an executable recipe. Inspect or run one from
+the repository root:
+
+```bash
+python scripts/run_training_recipe.py \
+  recipes/paper/nangate45/gnn-gatv2.yaml --gpu 0 --dry-run
+
+python scripts/run_training_recipe.py \
+  recipes/paper/sky130hd/pct4.yaml --gpu 0
+```
+
+The common protocol is a seeded 80/20 window split, MSRE, fixed Adam at `1e-4`,
+and 50 epochs. These are measured approximations of the paper rather than claims
+that unpublished implementation details are identical. See
+[`docs/training-baselines.md`](docs/training-baselines.md) for data preparation
+and execution, [`docs/baseline-results.md`](docs/baseline-results.md) for exact
+best/final comparisons, and [`docs/baseline-scope.md`](docs/baseline-scope.md)
+for the validation boundary.
 
 ## Cache Model
 
@@ -104,7 +138,7 @@ python -m capbench visualize cap3d --dataset nangate45/small --window W0
 Developer-only flows live under the repo-local `tools/` namespace and are not part of the public `capbench` package:
 
 ```bash
-python -m tools.preprocess.window_processing_pipeline --windows-file /abs/path/windows.yaml --dataset-path /abs/path/dataset --pipeline cnn
+python -m tools.preprocess.window_processing_pipeline --windows-file /abs/path/windows.yaml --dataset-path /abs/path/dataset --pipeline cnn pct gnn
 python -m tools.maintenance.rwcap --rwcap-bin /abs/path/to/rwcap --process-nodes nangate45 --sizes small --jobs 8
 python -m tools.maintenance.window_metadata --help
 python -m tools.maintenance.density_explorer --cap3d /abs/path/window.cap3d

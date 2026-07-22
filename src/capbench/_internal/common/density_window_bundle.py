@@ -447,6 +447,7 @@ class DensityWindowShardWriter:
         *,
         windows_per_shard: int = 64,
         window_shuffle_seed: Optional[int] = None,
+        replace_existing: bool = False,
     ) -> None:
         if windows_per_shard <= 0:
             raise ValueError(f"windows_per_shard must be > 0, got {windows_per_shard}")
@@ -456,9 +457,18 @@ class DensityWindowShardWriter:
         self.window_shuffle_seed = (
             None if window_shuffle_seed is None else int(window_shuffle_seed)
         )
+        self.replace_existing = bool(replace_existing)
+        if self.root.exists() and not self.replace_existing:
+            raise FileExistsError(
+                f"Density-window output already exists: {self.root}. "
+                "Choose a fresh output directory or pass replace_existing=True explicitly."
+            )
         self.tmp_root = self.root.with_name(self.root.name + ".tmp")
         if self.tmp_root.exists():
-            shutil.rmtree(self.tmp_root)
+            raise FileExistsError(
+                f"Temporary density-window output already exists: {self.tmp_root}. "
+                "Inspect or move it before retrying."
+            )
         (self.tmp_root / SHARDS_DIRNAME).mkdir(parents=True, exist_ok=True)
 
         self._expected_layer_names: Optional[tuple[str, ...]] = None
@@ -531,8 +541,10 @@ class DensityWindowShardWriter:
             encoding="utf-8",
         )
 
-        if self.root.exists():
+        if self.root.exists() and self.replace_existing:
             shutil.rmtree(self.root)
+        elif self.root.exists():
+            raise FileExistsError(f"Density-window output appeared during conversion: {self.root}")
         self.tmp_root.rename(self.root)
         _load_density_window_index_cached.cache_clear()
         _read_density_window_shard_cached.cache_clear()
@@ -547,6 +559,7 @@ def save_density_window_shards(
     windows_per_shard: int = 64,
     shuffle_windows: bool = True,
     shuffle_seed: int = 0,
+    replace_existing: bool = False,
 ) -> Path:
     """Write a full shard-backed density dataset root."""
     if windows_per_shard <= 0:
@@ -585,6 +598,7 @@ def save_density_window_shards(
         root,
         windows_per_shard=windows_per_shard,
         window_shuffle_seed=(int(shuffle_seed) if shuffle_windows else None),
+        replace_existing=replace_existing,
     ) as writer:
         for payload in normalized_payloads:
             writer.add_window_payload(payload)
@@ -604,6 +618,7 @@ def save_density_window_bundle(
     pixel_resolution: float,
     raster_trim_applied: bool,
     source_window_bounds: Optional[Sequence[float]] = None,
+    replace_existing: bool = False,
 ) -> Path:
     """Compatibility wrapper that writes a single-window shard-backed dataset."""
     bundle_path = Path(bundle_dir)
@@ -626,5 +641,6 @@ def save_density_window_bundle(
         ],
         windows_per_shard=1,
         shuffle_windows=False,
+        replace_existing=replace_existing,
     )
     return density_window_bundle_path(output_root, window_id)

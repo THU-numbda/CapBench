@@ -1,0 +1,26 @@
+name: paper-sky130hd-cnn-resnet34
+pdk: sky130hd
+family: cnn
+paper_target_mape_percent: 1.99
+protocol:
+  split: 80/20 windows
+  objective: msre
+  optimizer: adam
+  learning_rate: 0.0001
+  epochs: 50
+  seed: 42
+entrypoint: models/cnn/train.py
+arguments:
+  dataset-path: sky130hd/small
+  model-type: resnet34
+  required-layers: [li1, mcon, met1, via, met2, via2, met3, via3, met4]
+  epochs: 50
+  batch-size: 64
+  lr: 0.0001
+  weight-decay: 0.0
+  val-split: 0.2
+  seed: 42
+  labels-solver: rwcap
+  max-windows: 0
+  num-workers: 8
+  output-dir: diagnostics/paper-sky130hd-cnn-resnet34

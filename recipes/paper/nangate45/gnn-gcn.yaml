@@ -1,0 +1,29 @@
+name: paper-nangate45-gnn-gcn
+pdk: nangate45
+family: gnn
+paper_target_mape_percent: 21.4
+paper_parameter_count: 20900
+recipe_parameter_count: 99970
+protocol:
+  split: 80/20 windows
+  objective: msre
+  optimizer: adam
+  learning_rate: 0.0001
+  epochs: 50
+  seed: 42
+entrypoint: models/gnn/train_lightning.py
+arguments:
+  dataset-path: nangate45/small
+  labels-solver: rwcap
+  conv-type: gcn
+  hidden-dims: [128, 256]
+  aggregation-hidden: 128
+  standardize-node-features: true
+  epochs: 50
+  lr: 0.0001
+  patience: 0
+  gpus: 1
+  num-workers: 4
+  seed: 42
+  checkpoint-dir: checkpoints/paper-nangate45-gnn-gcn
+  log-dir: logs/paper-nangate45-gnn-gcn

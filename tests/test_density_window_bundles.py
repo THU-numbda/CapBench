@@ -218,6 +218,19 @@ class DensityWindowBundleTests(unittest.TestCase):
             self.assertEqual(raw_index["windows"]["W1"]["shard_id"], 1)
             self.assertEqual(raw_index["windows"]["W3"]["shard_id"], 1)
 
+    def test_shard_writer_refuses_to_replace_existing_data_by_default(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_density_dataset(root, ["W0"])
+
+            with self.assertRaises(FileExistsError):
+                save_density_window_shards(
+                    root / "density_maps",
+                    [_make_window_payload("W1")],
+                )
+
+            self.assertEqual(discover_density_window_ids(root / "density_maps"), ["W0"])
+
     @unittest.skipIf(DensityMapGenerator is None, "cnn converter dependencies are not installed")
     def test_converter_uses_cap3d_filename_for_shard_window_id(self) -> None:
         generator = DensityMapGenerator(

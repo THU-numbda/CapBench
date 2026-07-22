@@ -1,0 +1,29 @@
+name: paper-sky130hd-gnn-gat
+pdk: sky130hd
+family: gnn
+paper_target_mape_percent: 12.1
+paper_parameter_count: 84400
+recipe_parameter_count: 137666
+protocol:
+  split: 80/20 windows
+  objective: msre
+  optimizer: adam
+  learning_rate: 0.0001
+  epochs: 50
+  seed: 42
+entrypoint: models/gnn/train_lightning.py
+arguments:
+  dataset-path: sky130hd/small
+  labels-solver: rwcap
+  conv-type: gat
+  hidden-dims: [192, 256]
+  heads: 4
+  aggregation-hidden: 128
+  epochs: 50
+  lr: 0.0001
+  patience: 0
+  gpus: 1
+  num-workers: 6
+  seed: 42
+  checkpoint-dir: checkpoints/paper-sky130hd-gnn-gat
+  log-dir: logs/paper-sky130hd-gnn-gat
