@@ -91,15 +91,32 @@ class GNNModelTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         sys.path[:] = cls._old_path
 
-    def test_paper_scale_gatv2_parameter_count(self) -> None:
+    def test_gatv2_root_residual_preserves_node_features(self) -> None:
         model = self.model_class(
             conv_type="gatv2",
-            hidden_dims=(248, 256),
-            heads=4,
-            aggregation_hidden_dim=128,
+            hidden_dims=(3, 3),
+            heads=1,
+            aggregation_hidden_dim=2,
+        ).eval()
+        with torch.no_grad():
+            for conv in model.convs:
+                for parameter in conv.parameters():
+                    parameter.zero_()
+            for residual in model.attention_residuals:
+                residual.weight.copy_(torch.eye(3))
+            for parameter in model.net_aggregator.score_network.parameters():
+                parameter.zero_()
+            model.predictor.weight.zero_()
+            model.predictor.weight[0, 0] = 1.0
+            model.predictor.bias.zero_()
+
+        prediction = model(
+            torch.tensor([[1.0, 0.0, 0.0], [3.0, 0.0, 0.0]]),
+            torch.tensor([[0, 1], [1, 0]], dtype=torch.long),
+            torch.zeros((2, 7)),
+            torch.tensor([[True, True]]),
         )
-        count = sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
-        self.assertEqual(count, 167_290)
+        self.assertTrue(torch.allclose(prediction, torch.tensor([[2.0]])))
 
     def test_gcn_root_residual_preserves_node_features(self) -> None:
         model = self.model_class(

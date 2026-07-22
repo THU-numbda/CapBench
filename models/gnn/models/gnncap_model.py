@@ -63,7 +63,7 @@ class GNNCapModel(nn.Module):
         dims = [node_feature_dim] + list(hidden_dims)
         self.convs = nn.ModuleList()
         self.gcn_residuals = nn.ModuleList()
-        self.gat_residuals = nn.ModuleList()
+        self.attention_residuals = nn.ModuleList()
         for in_dim, out_dim in zip(dims[:-1], dims[1:]):
             self.convs.append(self._build_conv_layer(in_dim, out_dim))
             if self.conv_type == "gcn":
@@ -74,8 +74,8 @@ class GNNCapModel(nn.Module):
                 self.gcn_residuals.append(
                     nn.Linear(in_dim, out_dim, bias=False)
                 )
-            elif self.conv_type == "gat":
-                self.gat_residuals.append(
+            elif self.conv_type in {"gat", "gatv2"}:
+                self.attention_residuals.append(
                     nn.Linear(in_dim, out_dim, bias=False)
                 )
 
@@ -182,10 +182,10 @@ class GNNCapModel(nn.Module):
                 )
             else:
                 node_embeddings = conv(layer_input, edge_index, edge_attr)
-                if self.conv_type == "gat":
+                if self.conv_type in {"gat", "gatv2"}:
                     node_embeddings = (
                         node_embeddings
-                        + self.gat_residuals[layer_index](layer_input)
+                        + self.attention_residuals[layer_index](layer_input)
                     )
             node_embeddings = F.relu(node_embeddings)
 

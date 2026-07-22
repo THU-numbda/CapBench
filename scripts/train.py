@@ -131,7 +131,6 @@ def main() -> int:
         help="Override one trainer argument; repeat as needed.",
     )
     parser.add_argument("--python", default=sys.executable, help="Python executable.")
-    parser.add_argument("--dry-run", action="store_true", help="Print without running.")
     args = parser.parse_args()
 
     catalog = load_catalog()
@@ -156,8 +155,6 @@ def main() -> int:
     if args.gpu is not None:
         print(f"Physical GPU: {args.gpu} (visible device cuda:0)")
     print(shlex.join(command))
-    if args.dry_run:
-        return 0
 
     completed = subprocess.run(command, cwd=REPO_ROOT, env=environment, check=False)
     return completed.returncode

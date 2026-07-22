@@ -37,12 +37,6 @@ If you also want visualization extras and the repo-local developer tools availab
 python -m pip install -e ".[all]"
 ```
 
-For model training without visualization/developer extras:
-
-```bash
-python -m pip install -e ".[baselines]"
-```
-
 Using `python -m pip` ensures the install targets the active interpreter. This works the same way in a conda environment, a standard Python virtual environment, or directly inside your container.
 
 2. Inspect the registered datasets:
@@ -83,6 +77,10 @@ python -m capbench datasets install nangate45
 # or: python -m capbench datasets install sky130hd
 ```
 
+The Nangate45 and Sky130HD downloads already include the CNN density-map inputs,
+PCT point clouds, and GNN graphs, together with the corresponding labels. No
+separate preprocessing step is required before training.
+
 The launcher reads the paper-like settings from the single
 `recipes/paper.yaml` file. Run any model by selecting its PDK and model name:
 
@@ -94,10 +92,10 @@ python scripts/train.py --pdk nangate45 --model gat --gpu 0
 python scripts/train.py --pdk nangate45 --model gatv2 --gpu 0
 ```
 
-Replace `nangate45` with `sky130hd` to train on Sky130HD. Add `--dry-run` to
-inspect the generated trainer command, or use `--set epochs=1` for a short smoke
-test. The default configuration uses the small split, a seeded 80/20 window
-split, MSRE, Adam at `1e-4`, and 50 epochs.
+Replace `nangate45` with `sky130hd` to train on Sky130HD. The default
+configuration uses the small split, a seeded 80/20 window split, MSRE, Adam at
+`1e-4`, and 50 epochs. Trainer settings can be changed with repeated
+`--set KEY=VALUE` arguments.
 
 ## Cache Model
 
