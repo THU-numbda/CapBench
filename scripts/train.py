@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one checked-in CapBench baseline recipe without invoking a shell."""
+"""Launch a paper-like CapBench CNN, PCT, or GNN training run."""
 
 from __future__ import annotations
 
@@ -15,17 +15,18 @@ import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+CATALOG_PATH = REPO_ROOT / "recipes" / "paper.yaml"
+MODEL_CHOICES = ("cnn", "pct", "gcn", "gat", "gatv2")
+PDK_CHOICES = ("nangate45", "sky130hd")
 
 
-def load_recipe(path: Path | str) -> dict[str, Any]:
-    recipe_path = Path(path)
-    data = yaml.safe_load(recipe_path.read_text())
+def load_catalog(path: Path | str = CATALOG_PATH) -> dict[str, Any]:
+    catalog_path = Path(path)
+    data = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
-        raise ValueError(f"Recipe must contain a YAML mapping: {recipe_path}")
-    if not isinstance(data.get("entrypoint"), str):
-        raise ValueError(f"Recipe is missing a string entrypoint: {recipe_path}")
-    if not isinstance(data.get("arguments", {}), dict):
-        raise ValueError(f"Recipe arguments must be a mapping: {recipe_path}")
+        raise ValueError(f"Training catalog must contain a YAML mapping: {catalog_path}")
+    if not isinstance(data.get("pdks"), dict) or not isinstance(data.get("models"), dict):
+        raise ValueError(f"Training catalog must define pdks and models: {catalog_path}")
     return data
 
 
@@ -39,6 +40,45 @@ def parse_overrides(items: list[str]) -> dict[str, Any]:
             raise ValueError(f"Override key cannot be empty: {item}")
         overrides[key] = yaml.safe_load(value)
     return overrides
+
+
+def _format_value(value: Any, *, pdk: str, model: str) -> Any:
+    if isinstance(value, str):
+        return value.format(pdk=pdk, model=model)
+    if isinstance(value, list):
+        return [_format_value(item, pdk=pdk, model=model) for item in value]
+    return value
+
+
+def select_recipe(
+    catalog: Mapping[str, Any],
+    *,
+    pdk: str,
+    model: str,
+) -> dict[str, Any]:
+    try:
+        pdk_config = catalog["pdks"][pdk]
+        model_config = catalog["models"][model]
+    except KeyError as error:
+        raise ValueError(f"Unknown PDK/model selection: {pdk}/{model}") from error
+
+    family = model_config["family"]
+    arguments = {
+        key: _format_value(value, pdk=pdk, model=model)
+        for key, value in model_config.get("arguments", {}).items()
+    }
+    arguments["dataset-path"] = pdk_config["dataset-path"]
+    arguments.update(pdk_config.get(family, {}))
+
+    return {
+        "name": f"paper-{pdk}-{model}",
+        "entrypoint": model_config["entrypoint"],
+        "arguments": arguments,
+        "protocol": catalog.get("protocol", {}),
+        "paper_target_mape_percent": model_config.get(
+            "paper-target-mape-percent", {}
+        ).get(pdk),
+    }
 
 
 def _append_argument(command: list[str], key: str, value: Any) -> None:
@@ -72,48 +112,47 @@ def build_command(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run a checked-in CNN, PCT, or GNN paper-like training recipe."
+        description="Train a paper-like CapBench CNN, PCT, GCN, GAT, or GATv2 model."
     )
-    parser.add_argument("recipe", type=Path, help="Recipe YAML file.")
+    parser.add_argument("--pdk", required=True, choices=PDK_CHOICES)
+    parser.add_argument("--model", required=True, choices=MODEL_CHOICES)
+    parser.add_argument(
+        "--gpu",
+        type=int,
+        default=None,
+        help="Use one physical GPU, exposed to the trainer as cuda:0.",
+    )
     parser.add_argument(
         "--set",
         dest="overrides",
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="Override one recipe argument; repeat as needed.",
-    )
-    parser.add_argument(
-        "--gpu",
-        type=int,
-        default=None,
-        help="Restrict the process to one physical GPU (visible as cuda:0).",
+        help="Override one trainer argument; repeat as needed.",
     )
     parser.add_argument("--python", default=sys.executable, help="Python executable.")
     parser.add_argument("--dry-run", action="store_true", help="Print without running.")
     args = parser.parse_args()
 
-    recipe_path = args.recipe.resolve()
-    recipe = load_recipe(recipe_path)
+    catalog = load_catalog()
+    recipe = select_recipe(catalog, pdk=args.pdk, model=args.model)
     entrypoint = (REPO_ROOT / recipe["entrypoint"]).resolve()
     if not entrypoint.is_file() or REPO_ROOT not in entrypoint.parents:
         raise FileNotFoundError(
-            f"Recipe entrypoint must be a file inside the repository: {entrypoint}"
+            f"Training entrypoint must be a file inside the repository: {entrypoint}"
         )
 
-    overrides = parse_overrides(args.overrides)
     command = build_command(
         recipe,
         python_executable=args.python,
-        overrides=overrides,
+        overrides=parse_overrides(args.overrides),
     )
     environment = os.environ.copy()
     if args.gpu is not None:
         environment["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
         environment["APPTAINERENV_CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 
-    name = recipe.get("name", recipe_path.stem)
-    print(f"Recipe: {name}")
+    print(f"Training: {args.pdk}/{args.model}")
     if args.gpu is not None:
         print(f"Physical GPU: {args.gpu} (visible device cuda:0)")
     print(shlex.join(command))

@@ -1,6 +1,5 @@
 # Adapted from torchvision.models.resnet for variable input-channel counts.
-# Copyright (c) Soumith Chintala 2016. Distributed under BSD-3-Clause;
-# see models/cnn/LICENSE.
+# Copyright (c) Soumith Chintala 2016. Distributed under BSD-3-Clause.
 
 import torch
 from torch import Tensor

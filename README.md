@@ -8,7 +8,7 @@ The supported user-facing surface is:
 - cached dataset download and inspection
 - standardized dataloader access for CAP3D-backed density maps and density-map ID maps
 - visualization for CAP3D
-- paper-like CNN, PCT, GCN, GAT, and GATv2 training recipes
+- paper-like CNN, PCT, GCN, GAT, and GATv2 training configurations
 
 The following flows remain in the repository, but are considered developer-only tooling rather than the default product:
 
@@ -69,30 +69,35 @@ python -m capbench visualize cap3d --dataset nangate45/small --window W0
 
 - `src/capbench/`: the only installable Python package
 - `models/`: maintained CNN, PCT, and GNN model/training entrypoints
-- `recipes/paper/`: checked-in Nangate45 and Sky130HD baseline configurations
+- `recipes/paper.yaml`: Nangate45 and Sky130HD baseline configurations
 - `tools/`: repo-local developer tools for dataset authoring and maintenance
 - `reference/`: development scripts, historical baselines, and flow snapshots kept for provenance
 
-## Paper-like baseline training
+## Train the CNN, PCT, and GNN models
 
-Each validated PDK/model pair has an executable recipe. Inspect or run one from
-the repository root:
+Install the training dependencies and download either validated dataset:
 
 ```bash
-python scripts/run_training_recipe.py \
-  recipes/paper/nangate45/gnn-gatv2.yaml --gpu 0 --dry-run
-
-python scripts/run_training_recipe.py \
-  recipes/paper/sky130hd/pct4.yaml --gpu 0
+python -m pip install -e ".[baselines]"
+python -m capbench datasets install nangate45
+# or: python -m capbench datasets install sky130hd
 ```
 
-The common protocol is a seeded 80/20 window split, MSRE, fixed Adam at `1e-4`,
-and 50 epochs. These are measured approximations of the paper rather than claims
-that unpublished implementation details are identical. See
-[`docs/training-baselines.md`](docs/training-baselines.md) for data preparation
-and execution, [`docs/baseline-results.md`](docs/baseline-results.md) for exact
-best/final comparisons, and [`docs/baseline-scope.md`](docs/baseline-scope.md)
-for the validation boundary.
+The launcher reads the paper-like settings from the single
+`recipes/paper.yaml` file. Run any model by selecting its PDK and model name:
+
+```bash
+python scripts/train.py --pdk nangate45 --model cnn --gpu 0
+python scripts/train.py --pdk nangate45 --model pct --gpu 0
+python scripts/train.py --pdk nangate45 --model gcn --gpu 0
+python scripts/train.py --pdk nangate45 --model gat --gpu 0
+python scripts/train.py --pdk nangate45 --model gatv2 --gpu 0
+```
+
+Replace `nangate45` with `sky130hd` to train on Sky130HD. Add `--dry-run` to
+inspect the generated trainer command, or use `--set epochs=1` for a short smoke
+test. The default configuration uses the small split, a seeded 80/20 window
+split, MSRE, Adam at `1e-4`, and 50 epochs.
 
 ## Cache Model
 
