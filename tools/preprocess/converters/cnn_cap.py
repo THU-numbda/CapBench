@@ -759,6 +759,11 @@ Examples:
                        help='Coarse grid size for visualization (default: 30)')
     parser.add_argument('--dpi', type=int, default=150,
                        help='DPI for generated plots (default: 150)')
+    parser.add_argument(
+        '--replace-existing',
+        action='store_true',
+        help='Explicitly replace an existing density_maps output after conversion succeeds',
+    )
 
     args = parser.parse_args()
 
@@ -829,6 +834,7 @@ Examples:
         output_root,
         windows_per_shard=DEFAULT_WINDOWS_PER_SHARD,
         window_shuffle_seed=shuffle_seed,
+        replace_existing=args.replace_existing,
     ) as shard_writer:
         for cap3d_path in pbar:
             window_key = cap3d_path.stem

@@ -51,15 +51,17 @@ STAGE_LABELS = {
     'cap3d': 'CAP3D',
     'pct': 'PCT point clouds',
     'cnn': 'CNN density maps',
+    'gnn': 'GNN graphs',
 }
 
-STAGE_PRINT_ORDER = ['gds', 'cap3d', 'cnn', 'pct']
+STAGE_PRINT_ORDER = ['gds', 'cap3d', 'cnn', 'pct', 'gnn']
 
 STAGE_ALIASES = {
     'gds': 'gds',
     'cap3d': 'cap3d',
     'pct': 'pct',
     'cnn': 'cnn',
+    'gnn': 'gnn',
 }
 
 DEFAULT_LAYER_LIMITS = {
@@ -190,6 +192,7 @@ class WindowExtractor:
         self._lef_resolution_cache: Dict[Tuple[Path, str], List[str]] = {}
         self._cnn_shard_writer = None
         self._cnn_generated_windows = 0
+        self._existing_cnn_windows: Set[str] = set()
 
         # Load multi-design configuration
         self.designs = self.load_multi_design_yaml()
@@ -272,6 +275,7 @@ class WindowExtractor:
             'cap3d': self.cap3d_output_dir / f"{window_name}.cap3d",
             'pct': self.dataset_dirs['point_clouds'] / f"{window_name}.npz",
             'cnn': self.dataset_dirs['density_maps'] / window_name,
+            'gnn': self.dataset_dirs['graphs'] / f"{window_name}.pt",
         }
 
     def _load_lef_macro_sizes(self, stack_file: Path, tech_node: Optional[str]) -> Dict[str, Tuple[float, float]]:
@@ -292,6 +296,7 @@ class WindowExtractor:
             'cap3d': self.should_run_stage('cap3d'),
             'pct': self.should_run_stage('pct'),
             'cnn': self.should_run_stage('cnn'),
+            'gnn': self.should_run_stage('gnn'),
         }
 
     def _initialize_stage_counters(self, total_windows: int) -> Dict[str, Dict[str, int]]:
@@ -313,16 +318,15 @@ class WindowExtractor:
         if not self.stage_counters:
             return
 
-        existing_cnn_windows: Set[str] = set()
         if 'cnn' in self.stage_counters:
             try:
                 from capbench._internal.common.density_window_bundle import load_density_window_index
 
-                existing_cnn_windows = set(
+                self._existing_cnn_windows = set(
                     load_density_window_index(self.dataset_dirs['density_maps']).windows.keys()
                 )
             except FileNotFoundError:
-                existing_cnn_windows = set()
+                self._existing_cnn_windows = set()
 
         for window in self.all_windows:
             outputs = window.get('outputs') or self._build_output_paths(window['name'])
@@ -332,8 +336,10 @@ class WindowExtractor:
                 self.stage_counters['cap3d']['existing_pre'] += 1
             if 'pct' in self.stage_counters and outputs['pct'].exists():
                 self.stage_counters['pct']['existing_pre'] += 1
-            if 'cnn' in self.stage_counters and window['name'] in existing_cnn_windows:
+            if 'cnn' in self.stage_counters and window['name'] in self._existing_cnn_windows:
                 self.stage_counters['cnn']['existing_pre'] += 1
+            if 'gnn' in self.stage_counters and outputs['gnn'].exists():
+                self.stage_counters['gnn']['existing_pre'] += 1
 
     def _stage_label(self, stage: str) -> str:
         stage = _normalize_stage_name(stage)
@@ -375,7 +381,10 @@ class WindowExtractor:
         stage = _normalize_stage_name(stage)
         if not self._stage_active.get(stage, False):
             return False
-        if output_path.exists():
+        if stage == 'cnn' and output_path.name in self._existing_cnn_windows:
+            self._record_stage_skipped(stage)
+            return False
+        if stage != 'cnn' and output_path.exists():
             self._record_stage_skipped(stage)
             return False
         return True
@@ -1908,7 +1917,26 @@ class WindowExtractor:
                     print(f"    PCT conversion failed for {name}: {e}")
                     print(traceback.format_exc(), end="")
 
-        if self.should_run_stage('cnn'):
+        if self._should_run_conversion_stage('gnn', outputs['gnn']):
+            if not cap3d_path.exists():
+                print(f"    CAP3D file not found for GNN conversion: {name}: {cap3d_path}")
+            else:
+                try:
+                    print(f"    Converting to GNN: {name}")
+                    from tools.preprocess.converters.gnn_cap import convert_window as convert_gnn_window
+
+                    convert_gnn_window(
+                        cap3d_path,
+                        window_entry['stack_file'],
+                        output_dir=self.dataset_dirs['graphs'],
+                        dataset_dirs=self.dataset_dirs,
+                    )
+                    self._record_stage_generated('gnn')
+                except Exception as e:
+                    print(f"    GNN conversion failed for {name}: {e}")
+                    print(traceback.format_exc(), end="")
+
+        if self._should_run_conversion_stage('cnn', outputs['cnn']):
             if not cap3d_path.exists():
                 print(f"    CAP3D file not found for CNN conversion: {name}: {cap3d_path}")
             else:
@@ -2199,11 +2227,19 @@ class WindowExtractor:
         if self.should_run_stage('cnn'):
             from capbench._internal.common.density_window_bundle import DensityWindowShardWriter
 
-            cnn_writer_context = DensityWindowShardWriter(
-                self.dataset_dirs['density_maps'],
-                windows_per_shard=64,
-                window_shuffle_seed=0,
-            )
+            cnn_existing = self.stage_counters['cnn']['existing_pre']
+            if 0 < cnn_existing < total_windows:
+                raise RuntimeError(
+                    "The existing density_maps bundle is incomplete for this windows file. "
+                    "CapBench will not replace or append to it implicitly; inspect it and "
+                    "regenerate into a fresh dataset directory."
+                )
+            if cnn_existing == 0:
+                cnn_writer_context = DensityWindowShardWriter(
+                    self.dataset_dirs['density_maps'],
+                    windows_per_shard=64,
+                    window_shuffle_seed=0,
+                )
 
         with cnn_writer_context as cnn_writer:
             self._cnn_shard_writer = cnn_writer
@@ -2317,7 +2353,7 @@ Examples:
   python -m tools.preprocess.window_processing_pipeline --windows-file designs.yaml --pipeline gds
   python -m tools.preprocess.window_processing_pipeline --windows-file designs.yaml --pipeline cap3d cnn
   python -m tools.preprocess.window_processing_pipeline --windows-file designs.yaml --pipeline pct
-  python -m tools.preprocess.window_processing_pipeline --windows-file designs.yaml --pipeline cnn pct
+  python -m tools.preprocess.window_processing_pipeline --windows-file designs.yaml --pipeline cnn pct gnn
         '''
     )
 
@@ -2325,8 +2361,8 @@ Examples:
                        help='Multi-design YAML file with file paths and window coordinates')
     parser.add_argument('--dataset-path', type=str,
                        help='Dataset directory path for windows (default: directory containing the windows YAML)')
-    parser.add_argument('--pipeline', type=str, nargs='+', choices=['gds', 'cap3d', 'cnn', 'pct'], default=['cap3d', 'cnn', 'pct'],
-                       help='Pipeline stages to run (default: all stages). Choose from: gds, cap3d, cnn, pct')
+    parser.add_argument('--pipeline', type=str, nargs='+', choices=['gds', 'cap3d', 'cnn', 'pct', 'gnn'], default=['cap3d', 'cnn', 'pct'],
+                       help='Pipeline stages to run. Choose from: gds, cap3d, cnn, pct, gnn')
     parser.add_argument('--default-net-names', action='store_true',
                        help='Skip DEF→GDS net matching and assign sequential net names (faster).')
     

@@ -25,7 +25,8 @@
         "windows.yaml": null,
         "density_maps": "cnn",
         "labels_rwcap": null,
-        "point_clouds": "pct"
+        "point_clouds": "pct",
+        "graphs": "gnn"
       }
     },
     {
@@ -53,7 +54,8 @@
         "windows.yaml": null,
         "density_maps": "cnn",
         "labels_rwcap": null,
-        "point_clouds": "pct"
+        "point_clouds": "pct",
+        "graphs": "gnn"
       }
     },
     {
@@ -81,7 +83,8 @@
         "windows.yaml": null,
         "density_maps": "cnn",
         "labels_rwcap": null,
-        "point_clouds": "pct"
+        "point_clouds": "pct",
+        "graphs": "gnn"
       }
     },
     {
@@ -109,7 +112,8 @@
         "windows.yaml": null,
         "density_maps": "cnn",
         "labels_rwcap": null,
-        "point_clouds": "pct"
+        "point_clouds": "pct",
+        "graphs": "gnn"
       }
     },
     {
@@ -137,7 +141,8 @@
         "windows.yaml": null,
         "density_maps": "cnn",
         "labels_rwcap": null,
-        "point_clouds": "pct"
+        "point_clouds": "pct",
+        "graphs": "gnn"
       }
     },
     {
@@ -165,7 +170,8 @@
         "windows.yaml": null,
         "density_maps": "cnn",
         "labels_rwcap": null,
-        "point_clouds": "pct"
+        "point_clouds": "pct",
+        "graphs": "gnn"
       }
     },
     {
@@ -193,7 +199,8 @@
         "windows.yaml": null,
         "density_maps": "cnn",
         "labels_rwcap": null,
-        "point_clouds": "pct"
+        "point_clouds": "pct",
+        "graphs": "gnn"
       }
     },
     {
@@ -221,7 +228,8 @@
         "windows.yaml": null,
         "density_maps": "cnn",
         "labels_rwcap": null,
-        "point_clouds": "pct"
+        "point_clouds": "pct",
+        "graphs": "gnn"
       }
     },
     {
@@ -249,7 +257,8 @@
         "windows.yaml": null,
         "density_maps": "cnn",
         "labels_rwcap": null,
-        "point_clouds": "pct"
+        "point_clouds": "pct",
+        "graphs": "gnn"
       }
     }
   ]

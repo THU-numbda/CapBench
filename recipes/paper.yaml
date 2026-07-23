@@ -1,0 +1,128 @@
+version: 1
+
+protocol:
+  split: 80/20 windows
+  objective: msre
+  optimizer: adam
+  learning-rate: 0.0001
+  epochs: 50
+  seed: 42
+
+pdks:
+  nangate45:
+    dataset-path: nangate45/small
+    cnn:
+      required-layers: [metal1, via1, metal2, via2, metal3, via3, metal4]
+      num-workers: 8
+    pct:
+      num-workers: 4
+    gnn:
+      num-workers: 4
+  sky130hd:
+    dataset-path: sky130hd/small
+    cnn:
+      required-layers: [li1, mcon, met1, via, met2, via2, met3, via3, met4]
+      num-workers: 8
+    pct:
+      num-workers: 4
+    gnn:
+      num-workers: 6
+
+models:
+  cnn:
+    family: cnn
+    entrypoint: models/cnn/train.py
+    paper-target-mape-percent:
+      nangate45: 4.93
+      sky130hd: 1.99
+    arguments:
+      model-type: resnet34
+      epochs: 50
+      batch-size: 64
+      lr: 0.0001
+      weight-decay: 0.0
+      val-split: 0.2
+      seed: 42
+      labels-solver: rwcap
+      max-windows: 0
+      output-dir: diagnostics/paper-{pdk}-cnn-resnet34
+
+  pct:
+    family: pct
+    entrypoint: models/pct/train.py
+    paper-target-mape-percent:
+      nangate45: 9.12
+      sky130hd: 7.98
+    arguments:
+      labels-solver: rwcap
+      goal: self
+      npoints: 1024
+      num-sa-layers: 4
+      batch-size: 64
+      epochs: 50
+      lr: 0.0001
+      weight-decay: 0.0
+      val-split: 0.2
+      seed: 42
+      gpu: 0
+      output-dir: diagnostics/paper-{pdk}-pct4
+
+  gcn:
+    family: gnn
+    entrypoint: models/gnn/train_lightning.py
+    paper-target-mape-percent:
+      nangate45: 21.4
+      sky130hd: 13.9
+    arguments:
+      labels-solver: rwcap
+      conv-type: gcn
+      hidden-dims: [128, 256]
+      aggregation-hidden: 128
+      standardize-node-features: true
+      epochs: 50
+      lr: 0.0001
+      patience: 0
+      gpus: 1
+      seed: 42
+      checkpoint-dir: checkpoints/paper-{pdk}-gnn-gcn
+      log-dir: logs/paper-{pdk}-gnn-gcn
+
+  gat:
+    family: gnn
+    entrypoint: models/gnn/train_lightning.py
+    paper-target-mape-percent:
+      nangate45: 18.0
+      sky130hd: 12.1
+    arguments:
+      labels-solver: rwcap
+      conv-type: gat
+      hidden-dims: [192, 256]
+      heads: 4
+      aggregation-hidden: 128
+      epochs: 50
+      lr: 0.0001
+      patience: 0
+      gpus: 1
+      seed: 42
+      checkpoint-dir: checkpoints/paper-{pdk}-gnn-gat
+      log-dir: logs/paper-{pdk}-gnn-gat
+
+  gatv2:
+    family: gnn
+    entrypoint: models/gnn/train_lightning.py
+    paper-target-mape-percent:
+      nangate45: 14.7
+      sky130hd: 10.2
+    arguments:
+      labels-solver: rwcap
+      conv-type: gatv2
+      hidden-dims: [248, 256]
+      heads: 4
+      aggregation-hidden: 128
+      epochs: 50
+      lr: 0.0001
+      patience: 0
+      gpus: 1
+      seed: 42
+      checkpoint-dir: checkpoints/paper-{pdk}-gnn-gatv2
+      log-dir: logs/paper-{pdk}-gnn-gatv2

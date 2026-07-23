@@ -24,9 +24,11 @@ baselines = [
   "monai",
   "ptflops",
   "pytorch-lightning",
+  "tensorboard",
   "tensorboardx",
   "timm",
   "torch",
+  "torch-geometric>=2.5",
   "yacs",
 ]
 vis = [
@@ -36,6 +38,7 @@ vis = [
 dev = [
   "klayout",
   "psutil",
+  "pytest>=8",
   "pyvis",
   "rich",
   "rtree",
@@ -49,12 +52,15 @@ all = [
   "psutil",
   "ptflops",
   "pytorch-lightning",
+  "pytest>=8",
   "pyvis",
   "rich",
   "rtree",
+  "tensorboard",
   "tensorboardx",
   "timm",
   "torch",
+  "torch-geometric>=2.5",
   "vtk>=9.2",
   "yacs",
 ]

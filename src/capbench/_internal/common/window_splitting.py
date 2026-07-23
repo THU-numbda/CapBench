@@ -47,8 +47,14 @@ def create_window_level_splits(
     # Calculate split points
     n_total = len(shuffled_windows)
     n_train = int(n_total * train_ratio)
-    n_val = int(n_total * val_ratio)
-    n_test = n_total - n_train - n_val  # Ensure all windows are used
+    if test_ratio == 0.0:
+        # For an exact two-way split, integer rounding belongs to validation.
+        # Do not silently create a one-window test remainder.
+        n_val = n_total - n_train
+        n_test = 0
+    else:
+        n_val = int(n_total * val_ratio)
+        n_test = n_total - n_train - n_val  # Ensure all windows are used
 
     # Split windows
     train_windows = shuffled_windows[:n_train]
@@ -161,11 +167,22 @@ class WindowSubsetDataset(Dataset):
 
             # Get samples for this window from base dataset
             if hasattr(self.base_dataset, '_window_samples'):
-                # CNN-Cap style
+                # CNN-Cap style.
                 window_samples = self.base_dataset._window_samples[window_idx]
                 start = len(self.sample_mapping)
                 for sample_idx in range(len(window_samples)):
-                    self.sample_mapping.append((window_idx, sample_idx))
+                    self.sample_mapping.append((window_idx, sample_idx, None))
+                self._window_sample_ranges.append((start, len(self.sample_mapping)))
+            elif hasattr(self.base_dataset, '_window_samples_self'):
+                # PCT-Cap keeps separate stores for self and coupling samples.
+                sample_type = self.base_dataset.goal
+                if sample_type == "self":
+                    window_samples = self.base_dataset._window_samples_self[window_idx]
+                else:
+                    window_samples = self.base_dataset._window_samples_coupling[window_idx]
+                start = len(self.sample_mapping)
+                for sample_idx in range(len(window_samples)):
+                    self.sample_mapping.append((window_idx, sample_idx, sample_type))
                 self._window_sample_ranges.append((start, len(self.sample_mapping)))
             else:
                 # Fallback for other dataset types
@@ -181,11 +198,17 @@ class WindowSubsetDataset(Dataset):
         if idx >= len(self.sample_mapping):
             raise IndexError(f"Index {idx} out of range for dataset with {len(self)} samples")
 
-        window_idx, sample_idx = self.sample_mapping[idx]
+        window_idx, sample_idx, sample_type = self.sample_mapping[idx]
 
         # Use base dataset's __getitem__ with window-local indexing
         if hasattr(self.base_dataset, '_get_item_window_level'):
-            return self.base_dataset._get_item_window_level(window_idx, sample_idx)
+            if sample_type is None:
+                return self.base_dataset._get_item_window_level(window_idx, sample_idx)
+            return self.base_dataset._get_item_window_level(
+                window_idx,
+                sample_idx,
+                sample_type,
+            )
         else:
             # Fallback - may need custom implementation
             raise NotImplementedError("Base dataset needs _get_item_window_level method")

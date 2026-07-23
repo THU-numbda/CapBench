@@ -1,12 +1,14 @@
 # CapBench
 
-CapBench is a pip-first Python library for cached layout datasets, standardized dataloaders, and visualization.
+CapBench is a pip-first Python library for cached layout datasets, standardized
+dataloaders, visualization, and maintained CNN/PCT/GNN training baselines.
 
 The supported user-facing surface is:
 
 - cached dataset download and inspection
 - standardized dataloader access for CAP3D-backed density maps and density-map ID maps
 - visualization for CAP3D
+- paper-like CNN, PCT, GCN, GAT, and GATv2 training configurations
 
 The following flows remain in the repository, but are considered developer-only tooling rather than the default product:
 
@@ -16,7 +18,10 @@ The following flows remain in the repository, but are considered developer-only 
 - density exploration
 - RWCap maintenance helpers
 
-Reference material such as development scripts, baseline projects, and upstream flow snapshots now lives under `reference/` and is not part of the installable package.
+Reference material such as development scripts, historical baseline snapshots,
+and upstream flow snapshots lives under `reference/` and is not part of the
+installable package. Runnable baselines live under `models/` and use the public
+`capbench.*` data interfaces.
 
 ## Quickstart After Clone
 
@@ -57,8 +62,40 @@ python -m capbench visualize cap3d --dataset nangate45/small --window W0
 ## Repository Layout
 
 - `src/capbench/`: the only installable Python package
+- `models/`: maintained CNN, PCT, and GNN model/training entrypoints
+- `recipes/paper.yaml`: Nangate45 and Sky130HD baseline configurations
 - `tools/`: repo-local developer tools for dataset authoring and maintenance
 - `reference/`: development scripts, historical baselines, and flow snapshots kept for provenance
+
+## Train the CNN, PCT, and GNN models
+
+Install the training dependencies and download either validated dataset:
+
+```bash
+python -m pip install -e ".[baselines]"
+python -m capbench datasets install nangate45
+# or: python -m capbench datasets install sky130hd
+```
+
+The Nangate45 and Sky130HD downloads already include the CNN density-map inputs,
+PCT point clouds, and GNN graphs, together with the corresponding labels. No
+separate preprocessing step is required before training.
+
+The launcher reads the paper-like settings from the single
+`recipes/paper.yaml` file. Run any model by selecting its PDK and model name:
+
+```bash
+python scripts/train.py --pdk nangate45 --model cnn --gpu 0
+python scripts/train.py --pdk nangate45 --model pct --gpu 0
+python scripts/train.py --pdk nangate45 --model gcn --gpu 0
+python scripts/train.py --pdk nangate45 --model gat --gpu 0
+python scripts/train.py --pdk nangate45 --model gatv2 --gpu 0
+```
+
+Replace `nangate45` with `sky130hd` to train on Sky130HD. The default
+configuration uses the small split, a seeded 80/20 window split, MSRE, Adam at
+`1e-4`, and 50 epochs. Trainer settings can be changed with repeated
+`--set KEY=VALUE` arguments.
 
 ## Cache Model
 
@@ -104,7 +141,7 @@ python -m capbench visualize cap3d --dataset nangate45/small --window W0
 Developer-only flows live under the repo-local `tools/` namespace and are not part of the public `capbench` package:
 
 ```bash
-python -m tools.preprocess.window_processing_pipeline --windows-file /abs/path/windows.yaml --dataset-path /abs/path/dataset --pipeline cnn
+python -m tools.preprocess.window_processing_pipeline --windows-file /abs/path/windows.yaml --dataset-path /abs/path/dataset --pipeline cnn pct gnn
 python -m tools.maintenance.rwcap --rwcap-bin /abs/path/to/rwcap --process-nodes nangate45 --sizes small --jobs 8
 python -m tools.maintenance.window_metadata --help
 python -m tools.maintenance.density_explorer --cap3d /abs/path/window.cap3d
