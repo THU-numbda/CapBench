@@ -5,7 +5,7 @@ dataloaders, visualization, and maintained CNN, point-cloud-transformer (PCT),
 and graph-neural-network (GNN) baselines. It accompanies the
 [DAC 2026 paper](https://arxiv.org/abs/2604.11202).
 
-An extended dataset are shared on: https://numbda.cs.tsinghua.edu.cn/~hector/
+An extended dataset is shared on: https://numbda.cs.tsinghua.edu.cn/~hector/
 
 ## Quick Start
 
