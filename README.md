@@ -5,6 +5,8 @@ dataloaders, visualization, and maintained CNN, point-cloud-transformer (PCT),
 and graph-neural-network (GNN) baselines. It accompanies the
 [DAC 2026 paper](https://arxiv.org/abs/2604.11202).
 
+An extended dataset are shared on: https://numbda.cs.tsinghua.edu.cn/~hector/
+
 ## Quick Start
 
 1. Install the library into the current Python environment:
